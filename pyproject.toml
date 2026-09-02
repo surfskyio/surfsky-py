@@ -27,6 +27,8 @@ dependencies = [
 [project.urls]
 Homepage = "https://surfsky.io"
 Documentation = "https://docs.surfsky.io"
+Repository = "https://github.com/surfskyio/surfsky-py"
+Issues = "https://github.com/surfskyio/surfsky-py/issues"
 
 [dependency-groups]
 # for examples/ only: uv sync --group examples
