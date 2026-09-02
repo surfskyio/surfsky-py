@@ -1,0 +1,86 @@
+[project]
+name = "surfsky"
+version = "0.0.1"
+description = "Python SDK for the Surfsky antidetect browser cloud."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+keywords = ["surfsky", "antidetect", "browser", "automation", "scraping", "cdp", "devtools-protocol"]
+authors = [{ name = "Surfsky SDK contributors" }]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
+dependencies = [
+    "anyio>=4.4",
+    "httpx>=0.27",
+    "pydantic>=2.8",
+    "tenacity>=9.0",
+    "websockets>=13",
+]
+
+[project.urls]
+Homepage = "https://surfsky.io"
+Documentation = "https://docs.surfsky.io"
+
+[dependency-groups]
+# for examples/ only: uv sync --group examples
+examples = [
+    "playwright>=1.48",
+    "selenium>=4.25",
+]
+dev = [
+    "pytest>=8.3",
+    "pytest-httpx>=0.30",
+    "ruff>=0.6",
+    "ty>=0.0.56",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/surfsky"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "examples"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["anyio: run the test on the anyio event loop"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 90
+src = ["src", "tests"]
+extend-exclude = ["vendor"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "TID251"]
+ignore = ["E501"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# anyio everywhere; asyncio only where websockets forces it (the two files below)
+"asyncio".msg = "use anyio; bare asyncio is allowed only in browser/cdp.py and browser/browser.py"
+
+[tool.ruff.lint.per-file-ignores]
+"**/__init__.py" = ["F401", "F403"]
+"tests/*" = ["B", "SIM", "TID251"]
+"examples/*" = ["TID251"]
+"src/surfsky/browser/cdp.py" = ["TID251"]
+"src/surfsky/browser/browser.py" = ["TID251"]
+
+[tool.ty.environment]
+python-version = "3.12"
+
+[tool.ty.src]
+include = ["src", "examples", "tests/test_live_concurrency.py"]
+
+[tool.ty.rules]
+unused-ignore-comment = "ignore"
