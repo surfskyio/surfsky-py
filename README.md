@@ -64,7 +64,7 @@ async def main():
 asyncio.run(main())
 ```
 
-More examples in [`examples/`](examples/).
+More examples in [`examples/`](https://github.com/surfskyio/surfsky-py/tree/main/examples).
 
 ## Browser automation
 
@@ -160,7 +160,7 @@ avoids, `Runtime.enable` above all. The patched forks strip them and are
 drop-in replacements.
 
 Selenium works too (`enable_chromedriver=True`, see
-[`examples/selenium_connect.py`](examples/selenium_connect.py)) but isn't
+[`examples/selenium_connect.py`](https://github.com/surfskyio/surfsky-py/blob/main/examples/selenium_connect.py)) but isn't
 recommended: chromedriver is easy to detect.
 
 ## Proxies
@@ -367,7 +367,7 @@ start a second billed session.
 
 ## Examples
 
-More examples in [`examples/`](examples/). Install the extras first:
+More examples in [`examples/`](https://github.com/surfskyio/surfsky-py/tree/main/examples). Install the extras first:
 
 ```sh
 uv sync --group examples
