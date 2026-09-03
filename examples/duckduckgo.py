@@ -23,8 +23,7 @@ async def search(browser: Browser, query: str) -> list[dict[str, str]]:
     await browser.goto("https://duckduckgo.com", wait_until="domcontentloaded")
     print(f"{tag}: searching")
     await browser.type('[name="q"]', query)
-    # the button: keyboard.press("Enter") does not submit a form
-    await browser.click("#searchbox_homepage button[type=submit]")
+    await browser.keyboard.press("Enter")
     print(f"{tag}: waiting for results")
     await browser.wait_for_selector('[data-testid="result-title-a"]', timeout=30)
     hits = await browser.evaluate("""
