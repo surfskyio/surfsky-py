@@ -56,9 +56,7 @@ async def stop_session(client: "AsyncSurfsky", internal_uuid: str) -> None:
         except Exception as exc:
             logger.warning(f"failed to stop session {internal_uuid}: {exc}")
     if scope.cancelled_caught:
-        logger.warning(
-            f"stopping session {internal_uuid} timed out; it may keep billing"
-        )
+        logger.warning(f"stopping session {internal_uuid} timed out; it may keep billing")
 
 
 class Surfsky:
@@ -157,9 +155,7 @@ class Surfsky:
             try:
                 fast.profiles.stop(session)
             except Exception as exc:
-                logger.warning(
-                    f"failed to stop session {session.internal_uuid}: {exc}"
-                )
+                logger.warning(f"failed to stop session {session.internal_uuid}: {exc}")
 
     def close(self) -> None:
         if not self._shared_http:

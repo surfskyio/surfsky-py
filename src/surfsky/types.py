@@ -9,8 +9,18 @@ DeviceType = Literal["phone", "tablet"]
 WaitUntil = Literal["domcontentloaded", "load", "networkidle", "commit"]
 ProxyType = Literal["residential", "mobile"]
 RegionalPool = Literal[
-    "western", "europe", "westeurope", "northamerica", "southamerica", "asia",
-    "centralasia", "southasia", "eastasia", "sea", "oceania", "mena",
+    "western",
+    "europe",
+    "westeurope",
+    "northamerica",
+    "southamerica",
+    "asia",
+    "centralasia",
+    "southasia",
+    "eastasia",
+    "sea",
+    "oceania",
+    "mena",
 ]
 ExportFormat = Literal["json", "netscape"]
 ProfileOrdering = Literal["created", "-created", "active", "-active", "title", "-title"]
@@ -111,8 +121,7 @@ class ProxyTargeting(Request):
         return self
 
 
-class ProxyGeo(ProxyTargeting):
-    ...
+class ProxyGeo(ProxyTargeting): ...
 
 
 class PremiumProxy(ProxyTargeting):
