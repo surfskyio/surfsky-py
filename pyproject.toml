@@ -68,7 +68,6 @@ select = ["E", "F", "I", "UP", "B", "SIM", "TID251"]
 ignore = ["E501"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
-# anyio everywhere; asyncio only where websockets forces it (the two files below)
 "asyncio".msg = "use anyio; bare asyncio is allowed only in browser/cdp.py and browser/browser.py"
 
 [tool.ruff.lint.per-file-ignores]
