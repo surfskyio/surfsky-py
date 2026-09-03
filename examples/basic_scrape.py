@@ -35,5 +35,13 @@ async def main() -> None:
         print(f"{html[:200]}...")
 
 
+# The same list through ``pool.lease()`` instead of ``map``::
+#
+#     async with client.browsers() as pool:
+#         for url in URLS:
+#             async with pool.lease() as browser:
+#                 await browser.goto(url)
+
+
 if __name__ == "__main__":
     asyncio.run(main())
