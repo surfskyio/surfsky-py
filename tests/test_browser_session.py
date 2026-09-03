@@ -896,14 +896,6 @@ async def test_connect_twice_raises(fake_cdp):
             await browser.connect()  # would orphan the first socket
 
 
-@pytest.mark.anyio
-async def test_keepalive_pings_the_browser(monkeypatch, fake_cdp):
-    monkeypatch.setattr(mod, "KEEPALIVE_INTERVAL", 0.01)
-    async with make_browser():
-        await asyncio.sleep(0.05)
-    assert "Browser.getVersion" in fake_cdp.calls  # counts as activity server-side
-
-
 def test_disconnected_browser_should_recycle():
     browser = make_browser()
     assert not browser.connected
@@ -932,62 +924,6 @@ async def test_start_session_stops_after_close(fake_cdp):
         assert browser.connected
     assert events == ["start", "body", "stop"]
     assert not fake_cdp.connected
-
-
-class HangingPingCDP(FakeConnectCDP):
-    """Connects fine, then the socket half-opens: the ping is written but no
-    reply ever comes back."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.pings = 0
-
-    async def send(self, method, params=None, session_id=None):
-        if method == "Browser.getVersion":
-            self.pings += 1
-            await asyncio.sleep(60)
-        return await super().send(method, params, session_id)
-
-
-@pytest.mark.anyio
-async def test_a_wedged_keepalive_marks_the_browser_for_recycling(monkeypatch):
-    monkeypatch.setattr(mod, "KEEPALIVE_INTERVAL", 0.01)
-    monkeypatch.setattr(mod, "KEEPALIVE_TIMEOUT", 0.02)
-    fake = HangingPingCDP()
-    monkeypatch.setattr(mod, "CDPClient", lambda ws, **kw: fake)
-
-    browser = make_browser()
-    await browser.connect()
-    try:
-        with anyio.fail_after(2):
-            while not browser.should_recycle:
-                await anyio.sleep(0.01)
-    finally:
-        await browser.close()
-    assert fake.pings >= 1
-
-
-class FailingPingCDP(FakeConnectCDP):
-    async def send(self, method, params=None, session_id=None):
-        if method == "Browser.getVersion":
-            raise RuntimeError("browser is not answering")
-        return await super().send(method, params, session_id)
-
-
-@pytest.mark.anyio
-async def test_a_failed_keepalive_marks_the_browser_for_recycling(monkeypatch):
-    monkeypatch.setattr(mod, "KEEPALIVE_INTERVAL", 0.01)
-    fake = FailingPingCDP()
-    monkeypatch.setattr(mod, "CDPClient", lambda ws, **kw: fake)
-
-    browser = make_browser()
-    await browser.connect()
-    try:
-        with anyio.fail_after(2):
-            while not browser.should_recycle:
-                await anyio.sleep(0.01)
-    finally:
-        await browser.close()
 
 
 @pytest.mark.anyio

@@ -17,11 +17,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("surfsky")
 
-# The cloud stops a session after inactive_kill_timeout (30s default) without
-# CDP traffic from the user
-KEEPALIVE_INTERVAL = 10.0
-KEEPALIVE_TIMEOUT = 10.0
-
 # Pauses the document response so its HTTP status can be read, and nothing else
 STATUS_PATTERN = {
     "urlPattern": "*",
@@ -39,6 +34,13 @@ AUTO_ATTACH = {
 }
 
 NON_WEB_SCHEMES = ("chrome-extension://", "devtools://", "chrome://")
+
+START_PAGES = ("chrome://newtab", "chrome://new-tab-page")
+
+
+def _is_start_page(url: str) -> bool:
+    return url.split("?")[0].split("#")[0].removesuffix("/") in START_PAGES
+
 
 # CDP Network.ResourceType values
 RESOURCE_TYPES: dict[str, str] = {
@@ -210,7 +212,6 @@ class Browser(Page):
                     )
                     await self._page_ready(created["targetId"])
                 await self._wait_ready()
-                self._spawn(self._keepalive(client))
         except BaseException:
             await self.close()
             raise
@@ -256,21 +257,12 @@ class Browser(Page):
     def _page_for(self, target_id: str) -> Page | None:
         return next((p for p in self._pages.values() if p._target_id == target_id), None)
 
-    async def _keepalive(self, client: CDPClient) -> None:
-        while True:
-            await anyio.sleep(KEEPALIVE_INTERVAL)
-            try:
-                with anyio.fail_after(KEEPALIVE_TIMEOUT):
-                    await client.send("Browser.getVersion")
-            except Exception as exc:
-                logger.warning(f"keepalive failed for {self.internal_uuid}: {exc}")
-                self.retire()
-                return
-
     def _on_attached(self, event: dict[str, Any], session_id: str | None) -> None:
         info, session = event["targetInfo"], event["sessionId"]
         waiting = bool(event.get("waitingForDebugger"))
-        if info.get("type") != "page" or info.get("url", "").startswith(NON_WEB_SCHEMES):
+        url = info.get("url", "")
+        adopt = not self._session_id and _is_start_page(url)
+        if info.get("type") != "page" or (url.startswith(NON_WEB_SCHEMES) and not adopt):
             self._spawn(self._let_go(session, waiting))
             return
         if self._session_id:
@@ -284,9 +276,10 @@ class Browser(Page):
         self._spawn(page._setup(waiting))
 
     async def _let_go(self, session: str, waiting: bool) -> None:
-        if waiting:
-            await self.cdp.send("Runtime.runIfWaitingForDebugger", session_id=session)
-        await self.cdp.send("Target.detachFromTarget", {"sessionId": session})
+        with deadline(self.command_timeout, "the target did not let go"):
+            if waiting:
+                await self.cdp.send("Runtime.runIfWaitingForDebugger", session_id=session)
+            await self.cdp.send("Target.detachFromTarget", {"sessionId": session})
 
     def _on_detached(self, event: dict[str, Any], session_id: str | None) -> None:
         if (page := self._pages.get(event.get("sessionId", ""))) is not None:

@@ -194,6 +194,54 @@ async def test_targets_that_are_not_web_pages_are_let_go(cdp):
 
 
 @pytest.mark.anyio
+async def test_the_startup_tab_is_reused_not_replaced(cdp):
+    cdp.targets = [{"type": "page", "targetId": "T", "url": "chrome://newtab/"}]
+    async with make_browser() as browser:
+        await settle()
+        assert browser.target_id == "T"
+        assert browser.pages == [browser]
+        assert "Target.createTarget" not in [method for method, _, _ in cdp.calls]
+
+
+@pytest.mark.anyio
+async def test_a_decorated_startup_tab_is_still_the_startup_tab(cdp):
+    cdp.targets = [{"type": "page", "targetId": "T", "url": "chrome://new-tab-page/?x=1"}]
+    async with make_browser() as browser:
+        await settle()
+        assert browser.target_id == "T"
+        assert "Target.createTarget" not in [method for method, _, _ in cdp.calls]
+
+
+@pytest.mark.anyio
+async def test_a_start_page_opened_after_connect_is_let_go(cdp):
+    async with make_browser() as browser:
+        cdp.attach({"type": "page", "targetId": "N", "url": "chrome://newtab/"})
+        await settle()
+        assert browser.pages == [browser]
+        assert cdp.sent("Target.detachFromTarget") == [({"sessionId": "S2"}, None)]
+
+
+@pytest.mark.anyio
+async def test_another_chrome_page_is_still_let_go(cdp):
+    cdp.targets = [{"type": "page", "targetId": "SET", "url": "chrome://settings/"}, MAIN]
+    async with make_browser() as browser:
+        await settle()
+        assert browser.target_id == "T"
+        assert cdp.sent("Target.detachFromTarget") == [({"sessionId": "S1"}, None)]
+
+
+@pytest.mark.anyio
+async def test_a_let_go_that_never_answers_gives_up(cdp):
+    cdp.delay["Target.detachFromTarget"] = 5
+    async with make_browser(command_timeout=0.05) as browser:
+        running = set(browser._pending)  # the keepalive loop, which never finishes
+        cdp.attach({"type": "service_worker", "targetId": "SW", "url": ""})
+        [let_go] = set(browser._pending) - running
+        with pytest.raises(BrowserTimeoutError):
+            await asyncio.wait_for(let_go, 1)
+
+
+@pytest.mark.anyio
 async def test_a_paused_target_that_is_not_ours_is_resumed_before_it_is_let_go(cdp):
     async with make_browser():
         cdp.attach({"type": "service_worker", "targetId": "SW", "url": ""}, waiting=True)

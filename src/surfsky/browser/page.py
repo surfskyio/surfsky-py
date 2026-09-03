@@ -205,6 +205,7 @@ class Page(Actions):
         ]
         if waiting:
             commands.append(("Runtime.runIfWaitingForDebugger", None))
+        posted: list[tuple[int, Any]] = []
         try:
             with deadline(self._browser.command_timeout, "the page was not ready"):
                 posted = [await self.cdp.post(*c, self._session_id) for c in commands]
@@ -216,6 +217,8 @@ class Page(Actions):
         except Exception as exc:
             self._setup_error = exc
         finally:
+            for _, reply in posted:
+                reply.cancel()
             self._ready.set()
 
     async def close(self) -> None:

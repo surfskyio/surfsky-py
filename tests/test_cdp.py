@@ -167,8 +167,6 @@ async def test_stop_fails_pending_commands(monkeypatch):
 
 @pytest.mark.anyio
 async def test_cancelled_command_is_removed_from_pending(monkeypatch):
-    # a timed-out/cancelled await (e.g. under anyio.fail_after) must not leave
-    # the command's slot lingering in _pending
     ws = FakeWebSocket()
     ws.responder = lambda m: None
     client = await _connected(monkeypatch, ws)
@@ -179,6 +177,21 @@ async def test_cancelled_command_is_removed_from_pending(monkeypatch):
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+        assert not client._pending
+    finally:
+        await client.stop()
+
+
+@pytest.mark.anyio
+async def test_an_abandoned_post_is_removed_from_pending(monkeypatch):
+    ws = FakeWebSocket()
+    ws.responder = lambda m: None
+    client = await _connected(monkeypatch, ws)
+    try:
+        _, reply = await client.post("Never.returns")
+        assert client._pending
+        reply.cancel()
+        await asyncio.sleep(0)
         assert not client._pending
     finally:
         await client.stop()

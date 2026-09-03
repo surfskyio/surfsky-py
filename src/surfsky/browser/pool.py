@@ -182,9 +182,7 @@ class BrowserPool:
                     with anyio.fail_after(5):
                         await browser._end_lease()
                 except Exception as exc:
-                    logger.warning(
-                        f"could not clean up {browser.internal_uuid}: {exc}"
-                    )
+                    logger.warning(f"could not clean up {browser.internal_uuid}: {exc}")
                     browser.retire()
         recycle = browser.should_recycle
         if recycle:

@@ -88,7 +88,12 @@ class CDPClient:
         if session_id is not None:
             message["sessionId"] = session_id
         reply: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
-        reply.add_done_callback(retrieved)
+
+        def on_done(done: "asyncio.Future[Any]") -> None:
+            self._pending.pop(msg_id, None)
+            retrieved(done)
+
+        reply.add_done_callback(on_done)
         self._pending[msg_id] = reply
         try:
             await self._ws.send(json.dumps(message))
