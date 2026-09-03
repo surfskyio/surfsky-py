@@ -1,6 +1,6 @@
 [project]
 name = "surfsky"
-version = "0.0.1"
+version = "0.0.5"
 description = "Python SDK for the Surfsky antidetect browser cloud."
 readme = "README.md"
 requires-python = ">=3.12"
