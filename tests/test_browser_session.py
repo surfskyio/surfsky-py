@@ -397,6 +397,44 @@ async def test_html_returns_one_element_and_none_for_a_miss():
 
 
 @pytest.mark.anyio
+async def test_an_xpath_goes_through_the_search_domain_not_query_selector():
+    browser = make_browser()
+    browser._client = RecordingCDP(  # type: ignore[assignment]
+        {
+            "DOM.getDocument": DOCUMENT,
+            "DOM.performSearch": {"searchId": "s", "resultCount": 2},
+            "DOM.getSearchResults": {"nodeIds": [5]},
+            "DOM.discardSearchResults": {},
+            "DOM.getBoxModel": {"model": {"width": 80, "height": 20}},
+            "DOM.getOuterHTML": {"outerHTML": "<h1>Hi</h1>"},
+        }
+    )
+    await browser.wait_for_selector("//h1", timeout=1)
+    assert await browser.outer_html("xpath=//h1") == "<h1>Hi</h1>"
+    assert await browser.count("..//p") == 2
+    methods = [m for m, _ in browser._client.calls]
+    assert "DOM.querySelector" not in methods and "DOM.querySelectorAll" not in methods
+    queries = [p["query"] for p in browser._client.sent("DOM.performSearch")]
+    assert queries == ["//h1", "//h1", "..//p"]
+    assert [p["toIndex"] for p in browser._client.sent("DOM.getSearchResults")] == [1, 1]
+    assert len(browser._client.sent("DOM.discardSearchResults")) == 3
+
+
+@pytest.mark.anyio
+async def test_an_xpath_with_no_match_is_a_miss():
+    browser = make_browser()
+    browser._client = RecordingCDP(  # type: ignore[assignment]
+        {
+            "DOM.getDocument": DOCUMENT,
+            "DOM.performSearch": {"searchId": "s", "resultCount": 0},
+            "DOM.discardSearchResults": {},
+        }
+    )
+    assert await browser.outer_html("//h2") is None
+    assert "DOM.getSearchResults" not in [m for m, _ in browser._client.calls]
+
+
+@pytest.mark.anyio
 async def test_set_cookies_speaks_cdp_whatever_it_is_given():
     browser = make_browser()
     browser._client = RecordingCDP({"Network.setCookies": {}})  # type: ignore[assignment]

@@ -4,7 +4,7 @@ import logging
 import random
 import re
 from collections.abc import Callable, Coroutine, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -57,6 +57,13 @@ def cookie_param(cookie: Cookie | dict[str, Any]) -> dict[str, Any]:
     if (expires := cookie.get("expirationDate")) is not None:
         cookie = {"expires": expires, **cookie}
     return cookie
+
+
+def as_xpath(selector: str) -> str | None:
+    stripped = selector.strip()
+    if not stripped.startswith(("xpath=", "//", "..")):
+        return None
+    return stripped.removeprefix("xpath=")
 
 
 def command_failed(method: str, params: dict[str, Any] | None, exc: CDPError) -> CDPError:
@@ -492,6 +499,8 @@ class Page(Actions):
 
     async def count(self, selector: str) -> int:
         document = await self.send("DOM.getDocument", {"depth": 0})
+        if (xpath := as_xpath(selector)) is not None:
+            return (await self._search(xpath))[0]
         found = await self.send(
             "DOM.querySelectorAll",
             {"nodeId": document["root"]["nodeId"], "selector": selector},
@@ -535,11 +544,31 @@ class Page(Actions):
 
     async def _node_id(self, selector: str) -> int | None:
         document = await self.send("DOM.getDocument", {"depth": 0})
+        if (xpath := as_xpath(selector)) is not None:
+            return (await self._search(xpath, first=True))[1]
         found = await self.send(
             "DOM.querySelector",
             {"nodeId": document["root"]["nodeId"], "selector": selector},
         )
         return found.get("nodeId") or None
+
+    async def _search(self, query: str, *, first: bool = False) -> tuple[int, int | None]:
+        found = await self.send(
+            "DOM.performSearch", {"query": query, "includeUserAgentShadowDOM": True}
+        )
+        search_id, total = found["searchId"], found.get("resultCount") or 0
+        try:
+            if not first or not total:
+                return total, None
+            got = await self.send(
+                "DOM.getSearchResults",
+                {"searchId": search_id, "fromIndex": 0, "toIndex": 1},
+            )
+            node_ids = got.get("nodeIds") or ()
+            return total, node_ids[0] if node_ids else None
+        finally:
+            with suppress(Exception):
+                await self.send("DOM.discardSearchResults", {"searchId": search_id})
 
     async def wait_for_url(self, fragment: str, *, timeout: float = 30.0) -> str:
         with deadline(timeout, f"the page did not reach {fragment!r}"):
