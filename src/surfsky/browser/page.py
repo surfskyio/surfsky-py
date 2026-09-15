@@ -490,6 +490,26 @@ class Page(Actions):
             "s => Array.from(document.querySelectorAll(s), e => e.innerText)", selector
         )
 
+    async def type(self, selector: str, text: str) -> Any:
+        await self.click(selector)
+        await self._validate_focus(selector)
+        return await self.keyboard.type(text)
+
+    async def fill(self, selector: str, text: str) -> Any:
+        await self.click(selector, click_count=3)
+        await self._validate_focus(selector)
+        if not text:  # nothing typed leaves the selection in place
+            return await self.keyboard.press("Backspace")
+        return await self.keyboard.type(text)
+
+    async def _validate_focus(self, selector: str) -> None:
+        # Human.type goes to the focused element, which is wherever the click landed
+        focused = await self.evaluate(
+            "s => document.activeElement === document.querySelector(s)", selector
+        )
+        if not focused:
+            raise ValueError(f"{selector!r} did not take focus")
+
     async def get_attribute(self, selector: str, name: str) -> str | None:
         if (node_id := await self._node_id(selector)) is None:
             return None

@@ -165,14 +165,6 @@ class Actions:
         )
         return await self.send("Human.moveTo", params)
 
-    async def type(self, selector: str, text: str) -> Any:
-        await self.click(selector)
-        return await self.keyboard.type(text)
-
-    async def fill(self, selector: str, text: str) -> Any:
-        await self.click(selector, click_count=3)
-        return await self.keyboard.type(text)
-
     async def scroll(
         self,
         *,

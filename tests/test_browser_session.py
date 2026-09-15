@@ -524,14 +524,29 @@ async def test_an_element_screenshot_clips_to_its_box_in_page_coordinates():
 
 
 @pytest.mark.anyio
-async def test_fill_selects_what_is_there_before_typing():
+async def test_type_and_fill_check_that_the_click_took_focus():
     browser = make_browser()
-    browser._client = RecordingCDP({"Human.click": {}, "Human.type": {}})  # type: ignore[assignment]
+    focused = {"result": {"type": "boolean", "value": True}}
+    browser._client = RecordingCDP({  # type: ignore[assignment]
+        "Human.click": {}, "Human.type": {}, "Human.press": {}, "Runtime.evaluate": focused,
+    })
+    await browser.type("#q", "hi")
     await browser.fill("#q", "hello")
-    assert browser._client.calls == [
+    await browser.fill("#q", "")
+    human = [call for call in browser._client.calls if call[0].startswith("Human.")]
+    assert human == [
+        ("Human.click", {"selector": "#q"}),
+        ("Human.type", {"text": "hi"}),
         ("Human.click", {"selector": "#q", "clickCount": 3}),
         ("Human.type", {"text": "hello"}),
+        ("Human.click", {"selector": "#q", "clickCount": 3}),
+        ("Human.press", {"key": "Backspace"}),  # the selection, nothing typed over it
     ]
+    assert len(browser._client.sent("Runtime.evaluate")) == 3
+    focused["result"]["value"] = False  # an overlay took the click
+    with pytest.raises(ValueError, match="'#q' did not take focus"):
+        await browser.fill("#q", "hello")
+    assert browser._client.calls[-1][0] == "Runtime.evaluate"
 
 
 @pytest.mark.anyio

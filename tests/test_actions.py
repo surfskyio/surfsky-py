@@ -56,19 +56,6 @@ async def test_hover_scroll_and_scroll_into_view():
 
 
 @pytest.mark.anyio
-async def test_type_clicks_first_and_fill_selects_first():
-    actions = Recorder()
-    await actions.type("#q", "hi")
-    await actions.fill("#q", "yo")
-    assert actions.calls == [
-        ("Human.click", {"selector": "#q"}),
-        ("Human.type", {"text": "hi"}),
-        ("Human.click", {"selector": "#q", "clickCount": 3}),
-        ("Human.type", {"text": "yo"}),
-    ]
-
-
-@pytest.mark.anyio
 async def test_keyboard_type_and_press():
     actions = Recorder()
     await actions.keyboard.type("hi")
