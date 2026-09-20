@@ -17,13 +17,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("surfsky")
 
-# Pauses the document response so its HTTP status can be read, and nothing else
-STATUS_PATTERN = {
-    "urlPattern": "*",
-    "resourceType": "Document",
-    "requestStage": "Response",
-}
-
 # Every page target, present and future, attached on this socket and paused
 # until its setup is done
 AUTO_ATTACH = {
@@ -152,7 +145,7 @@ class Browser(Page):
             for name in sorted(self.blocked_resources)
         ]
         patterns.extend({"urlPattern": pattern} for pattern in self.blocked_urls)
-        return [*patterns, STATUS_PATTERN]
+        return patterns
 
     def retire(self) -> None:
         self._retired = True
@@ -247,6 +240,8 @@ class Browser(Page):
                 await page.close()
         await self.stop_capturing()
         self.on_dialog = None
+        with deadline(self.command_timeout, "the browser did not answer"):
+            await self.cdp.send("Browser.getVersion")
 
     async def _page_ready(self, target_id: str) -> Page:
         while (page := self._page_for(target_id)) is None:

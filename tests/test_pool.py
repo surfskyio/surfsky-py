@@ -9,6 +9,13 @@ from surfsky.browser.pool import BrowserPool, StopRun
 from surfsky.types import Session
 
 
+class Quiet:
+    connected = True
+
+    async def send(self, method, params=None, session_id=None):
+        return {}
+
+
 class FakeBrowser(Browser):
     """A Browser that never connects, so the pool logic can be tested offline."""
 
@@ -16,6 +23,7 @@ class FakeBrowser(Browser):
 
     def __init__(self) -> None:
         super().__init__(Session(internal_uuid="fake", ws_url="wss://fake"))
+        self._client = Quiet()  # type: ignore[assignment]
 
 
 def _offline_pool(monkeypatch, **kwargs) -> BrowserPool:
@@ -693,16 +701,9 @@ async def test_a_page_that_will_not_close_retires_the_browser(monkeypatch):
 
 @pytest.mark.anyio
 async def test_release_forgets_captures_and_the_dialog_handler(monkeypatch):
-    class Quiet:
-        connected = True
-
-        async def send(self, method, params=None, session_id=None):
-            return {}
-
     pool = _offline_pool(monkeypatch, concurrency=1)
     async with pool:
         async with pool.lease() as browser:
-            browser._client = Quiet()  # type: ignore[assignment]
             await browser.capture_responses("/api/")
             browser._responses.append(CapturedResponse(url="https://a.test/api/x", status=200))
             browser.on_dialog = lambda kind, message: True

@@ -136,7 +136,7 @@ async def test_a_paused_popup_does_not_deadlock_on_its_own_pause(monkeypatch):
         assert await popup.title() == "P"  # setup finished, so the page is usable
         # the arming commands reached Chrome before the resume let the page run
         on_popup = [m for m, _, s in fake.calls if s == "S2"]
-        assert on_popup.index("Fetch.enable") < on_popup.index("Runtime.runIfWaitingForDebugger")
+        assert on_popup.index("Network.enable") < on_popup.index("Runtime.runIfWaitingForDebugger")
 
 
 @pytest.fixture
@@ -162,7 +162,8 @@ async def test_connect_takes_the_first_web_page_through_auto_attach(cdp):
         assert attach["autoAttach"] and attach["waitForDebuggerOnStart"] and attach["flatten"]
         assert browser.target_id == "T"
         assert browser.pages == [browser]
-        assert cdp.sent("Fetch.enable") == [({"patterns": [mod.STATUS_PATTERN]}, "S1")]
+        assert cdp.sent("Fetch.enable") == []  # nothing to block, nothing paused
+        assert cdp.sent("Network.enable") == [({}, "S1")]
         assert browser._frame_id == "T"
         assert "Target.attachToTarget" not in [m for m, _, _ in cdp.calls]
 
@@ -266,13 +267,13 @@ async def test_a_popup_is_listed_and_driven_on_its_own_session(cdp):
 @pytest.mark.anyio
 async def test_a_paused_popup_is_set_up_before_it_runs_and_before_it_is_driven(cdp):
     async with make_browser() as browser:
-        cdp.delay["Fetch.enable"] = 0.02  # the setup is still in flight when asked
+        cdp.delay["Network.enable"] = 0.02
         cdp.attach(POPUP, waiting=True)
         await browser.pages[-1].title()
         assert [m for m, _, s in cdp.calls if s == "S2"] == [
             "Page.enable",
             "Page.setLifecycleEventsEnabled",
-            "Fetch.enable",
+            "Network.enable",
             "Runtime.runIfWaitingForDebugger",  # last: it lets the document run
             "Target.getTargetInfo",
         ]
@@ -281,9 +282,9 @@ async def test_a_paused_popup_is_set_up_before_it_runs_and_before_it_is_driven(c
 @pytest.mark.anyio
 async def test_a_popup_whose_setup_failed_says_so_when_used(cdp):
     async with make_browser() as browser:
-        cdp.rejected["Fetch.enable"] = "S2"
+        cdp.rejected["Network.enable"] = "S2"
         cdp.attach(POPUP, waiting=True)
-        with pytest.raises(RuntimeError, match="Fetch.enable rejected"):
+        with pytest.raises(RuntimeError, match="Network.enable rejected"):
             await browser.pages[-1].title()
         assert browser.connected  # the main page is unaffected
 
@@ -316,14 +317,12 @@ async def test_a_blocked_request_in_a_popup_is_answered_on_the_popup_session(cdp
         cdp.attach(POPUP)
         popup = browser.pages[-1]
         await popup.url()  # set up
-        paused = cdp.handlers["Fetch.requestPaused"]
-        paused({"requestId": "r1"}, "S2")
-        paused({"requestId": "r2", "responseStatusCode": 503, "frameId": "P"}, "S2")
+        cdp.handlers["Fetch.requestPaused"]({"requestId": "r1"}, "S2")
+        cdp.document_response("S2", "r2", 503, frame_id="P")
         await settle()
         assert cdp.sent("Fetch.failRequest") == [
             ({"requestId": "r1", "errorReason": "BlockedByClient"}, "S2")
         ]
-        assert cdp.sent("Fetch.continueResponse") == [({"requestId": "r2"}, "S2")]
         assert (popup.status, browser.status) == (503, None)
 
 

@@ -35,18 +35,25 @@ DIALOG_DELAY = (0.6, 1.4)
 
 FUNCTION = re.compile(r"^\s*(async\s+)?(function\b|\([^()]*\)\s*=>|[\w$]+\s*=>)")
 
-SELECT = """(selector, value, label) => {
-  const el = document.querySelector(selector);
-  if (!el) return null;
-  const option = Array.from(el.options).find(
+# what Chrome answers once the isolated world is gone
+WORLD_GONE = ("Cannot find context", "does not belong to the document")
+
+SELECT = """function (value, label) {
+  const option = Array.from(this.options).find(
     o => label === null ? o.value === value : o.label === label || o.text === label
   );
   if (!option) return false;
-  el.value = option.value;
-  el.dispatchEvent(new Event("input", {bubbles: true}));
-  el.dispatchEvent(new Event("change", {bubbles: true}));
+  this.value = option.value;
+  this.dispatchEvent(new Event("input", {bubbles: true}));
+  this.dispatchEvent(new Event("change", {bubbles: true}));
   return option.value;
 }"""
+
+INNER_TEXT = "function () { return this.innerText }"
+
+MATCHES = "function (s) { return this.nodeType === 1 && (s == null || this.matches(s)) }"
+
+IS_FOCUSED = "function () { return this.getRootNode().activeElement === this }"
 
 DialogHandler = Callable[[str, str], bool | str | None]
 
@@ -64,6 +71,15 @@ def as_xpath(selector: str) -> str | None:
     if not stripped.startswith(("xpath=", "//", "..")):
         return None
     return stripped.removeprefix("xpath=")
+
+
+def remote_result(result: dict[str, Any], what: str) -> dict[str, Any]:
+    if details := result.get("exceptionDetails"):
+        exception = details.get("exception") or {}
+        raise CDPError(
+            f"{what} failed: {exception.get('description') or details.get('text')}"
+        )
+    return result["result"]
 
 
 def command_failed(method: str, params: dict[str, Any] | None, exc: CDPError) -> CDPError:
@@ -208,8 +224,10 @@ class Page(Actions):
         commands: list[tuple[str, dict[str, Any] | None]] = [
             ("Page.enable", None),
             ("Page.setLifecycleEventsEnabled", {"enabled": True}),
-            ("Fetch.enable", {"patterns": self._browser._fetch_patterns}),
+            ("Network.enable", None),
         ]
+        if patterns := self._browser._fetch_patterns:
+            commands.append(("Fetch.enable", {"patterns": patterns}))
         if waiting:
             commands.append(("Runtime.runIfWaitingForDebugger", None))
         posted: list[tuple[int, Any]] = []
@@ -316,17 +334,13 @@ class Page(Actions):
     async def capture_responses(self, *fragments: str) -> None:
         if not fragments:
             raise ValueError("capture_responses needs at least one URL fragment")
-        if not self._captures:
-            await self.send("Network.enable")
+        self._require_open()
         self._captures.extend(fragments)
 
     async def stop_capturing(self) -> None:
-        if not self._captures:
-            return
         self._captures.clear()
         self._responses = []
         self._in_flight.clear()
-        await self.send("Network.disable")
 
     async def wait_for_response(
         self, fragment: str, *, timeout: float = 30.0
@@ -343,6 +357,8 @@ class Page(Actions):
 
     def _on_response(self, event: dict[str, Any]) -> None:
         response = event.get("response") or {}
+        if event.get("type") == "Document" and event.get("frameId") == self._frame_id:
+            self._status = response.get("status")
         url = response.get("url", "")
         if any(fragment in url for fragment in self._captures):
             self._in_flight[event["requestId"]] = response
@@ -448,18 +464,41 @@ class Page(Actions):
         try:
             result = await self.send("Runtime.evaluate", params)
         except CDPError as exc:
-            if not isolated or "Cannot find context" not in str(exc):
+            if not isolated or not any(text in str(exc) for text in WORLD_GONE):
                 raise
-            # the document changed under us before its event came: once more
+            # the document was replaced before its event came: once more
             self._world_id = None
             params["contextId"] = await self._world()
             result = await self.send("Runtime.evaluate", params)
-        if details := result.get("exceptionDetails"):
-            exception = details.get("exception") or {}
-            raise CDPError(
-                f"evaluate failed: {exception.get('description') or details.get('text')}"
-            )
-        return result["result"]
+        return remote_result(result, "evaluate")
+
+    async def _call(self, node_id: int, function: str, *args: Any) -> Any:
+        params = {
+            "functionDeclaration": function,
+            "arguments": [{"value": arg} for arg in args],
+            "returnByValue": True,
+        }
+        try:
+            result = await self._call_in_world(node_id, params)
+        except CDPError as exc:
+            if not any(text in str(exc) for text in WORLD_GONE):
+                raise
+            # the document was replaced before its event came: once more
+            self._world_id = None
+            result = await self._call_in_world(node_id, params)
+        return remote_result(result, "call").get("value")
+
+    async def _call_in_world(
+        self, node_id: int, params: dict[str, Any]
+    ) -> dict[str, Any]:
+        resolved = await self.send(
+            "DOM.resolveNode",
+            {"nodeId": node_id, "executionContextId": await self._world()},
+        )
+        return await self.send(
+            "Runtime.callFunctionOn",
+            {**params, "objectId": resolved["object"]["objectId"]},
+        )
 
     async def _world(self) -> int:
         if self._world_id is None:
@@ -481,9 +520,9 @@ class Page(Actions):
         return value
 
     async def inner_text(self, selector: str) -> str | None:
-        return await self.evaluate(
-            "s => document.querySelector(s)?.innerText ?? null", selector
-        )
+        if (node_id := await self._node_id(selector)) is None:
+            return None
+        return await self._call(node_id, INNER_TEXT)
 
     async def all_inner_texts(self, selector: str) -> list[str]:
         return await self.evaluate(
@@ -504,10 +543,8 @@ class Page(Actions):
 
     async def _validate_focus(self, selector: str) -> None:
         # Human.type goes to the focused element, which is wherever the click landed
-        focused = await self.evaluate(
-            "s => document.activeElement === document.querySelector(s)", selector
-        )
-        if not focused:
+        node_id = await self._node_id(selector)
+        if node_id is None or not await self._call(node_id, IS_FOCUSED):
             raise ValueError(f"{selector!r} did not take focus")
 
     async def get_attribute(self, selector: str, name: str) -> str | None:
@@ -517,24 +554,41 @@ class Page(Actions):
         pairs = found.get("attributes") or []
         return dict(zip(pairs[::2], pairs[1::2], strict=True)).get(name)
 
+    async def bounding_box(self, selector: str) -> dict[str, float] | None:
+        if (node_id := await self._node_id(selector)) is None:
+            return None
+        try:
+            box = await self.send("DOM.getBoxModel", {"nodeId": node_id})
+        except CDPError:
+            return None
+        quad = box["model"]["content"]
+        return {
+            "x": quad[0],
+            "y": quad[1],
+            "width": quad[2] - quad[0],
+            "height": quad[5] - quad[1],
+        }
+
     async def count(self, selector: str) -> int:
         document = await self.send("DOM.getDocument", {"depth": 0})
-        if (xpath := as_xpath(selector)) is not None:
-            return (await self._search(xpath))[0]
+        if as_xpath(selector) is not None:
+            return len(await self._search(selector))
         found = await self.send(
             "DOM.querySelectorAll",
             {"nodeId": document["root"]["nodeId"], "selector": selector},
         )
-        return len(found.get("nodeIds") or ())
+        if node_ids := found.get("nodeIds") or ():
+            return len(node_ids)
+        return len(await self._search(selector))
 
     async def select_option(
         self, selector: str, value: str | None = None, *, label: str | None = None
     ) -> str:
         if (value is None) == (label is None):
             raise ValueError("select_option takes either a value or a label")
-        picked = await self.evaluate(SELECT, selector, value, label)
-        if picked is None:
+        if (node_id := await self._node_id(selector)) is None:
             raise ValueError(f"nothing matches {selector!r}")
+        picked = await self._call(node_id, SELECT, value, label)
         if picked is False:
             raise ValueError(f"{selector!r} has no option {label or value!r}")
         return picked
@@ -564,28 +618,49 @@ class Page(Actions):
 
     async def _node_id(self, selector: str) -> int | None:
         document = await self.send("DOM.getDocument", {"depth": 0})
-        if (xpath := as_xpath(selector)) is not None:
-            return (await self._search(xpath, first=True))[1]
+        if as_xpath(selector) is not None:
+            found = await self._search(selector)
+            return found[0] if found else None
         found = await self.send(
             "DOM.querySelector",
             {"nodeId": document["root"]["nodeId"], "selector": selector},
         )
-        return found.get("nodeId") or None
+        if node_id := found.get("nodeId"):
+            return node_id
+        # nothing in the light DOM: the same selector inside every shadow root
+        pierced = await self._search(selector)
+        return pierced[0] if pierced else None
 
-    async def _search(self, query: str, *, first: bool = False) -> tuple[int, int | None]:
+    async def _search(self, selector: str) -> list[int]:
+        xpath = as_xpath(selector)
         found = await self.send(
-            "DOM.performSearch", {"query": query, "includeUserAgentShadowDOM": True}
+            "DOM.performSearch",
+            {"query": xpath or selector, "includeUserAgentShadowDOM": False},
         )
         search_id, total = found["searchId"], found.get("resultCount") or 0
         try:
-            if not first or not total:
-                return total, None
+            if not total:
+                return []
             got = await self.send(
                 "DOM.getSearchResults",
-                {"searchId": search_id, "fromIndex": 0, "toIndex": 1},
+                {"searchId": search_id, "fromIndex": 0, "toIndex": total},
             )
-            node_ids = got.get("nodeIds") or ()
-            return total, node_ids[0] if node_ids else None
+            node_ids = list(got.get("nodeIds") or ())
+            css = None if xpath is not None else selector
+            keep = [False] * len(node_ids)
+
+            async def check(index: int, node_id: int) -> None:
+                with suppress(CDPError):
+                    keep[index] = bool(await self._call(node_id, MATCHES, css))
+
+            await self._world()
+            try:
+                async with anyio.create_task_group() as group:
+                    for index, node_id in enumerate(node_ids):
+                        group.start_soon(check, index, node_id)
+            except ExceptionGroup as failures:
+                raise failures.exceptions[0] from None
+            return [n for n, ok in zip(node_ids, keep, strict=True) if ok]
         finally:
             with suppress(Exception):
                 await self.send("DOM.discardSearchResults", {"searchId": search_id})
@@ -707,15 +782,8 @@ class Page(Actions):
         if request_id is None:
             logger.warning("Fetch.requestPaused without a requestId")
             return
-        if (status := event.get("responseStatusCode")) is not None:
-            if event.get("frameId") == self._frame_id:
-                self._status = status
-            self._spawn(self._send("Fetch.continueResponse", {"requestId": request_id}))
-        elif event.get("responseErrorReason"):
-            self._spawn(self._send("Fetch.continueRequest", {"requestId": request_id}))
-        else:
-            params = {"requestId": request_id, "errorReason": "BlockedByClient"}
-            self._spawn(self._send("Fetch.failRequest", params))
+        params = {"requestId": request_id, "errorReason": "BlockedByClient"}
+        self._spawn(self._send("Fetch.failRequest", params))
 
     def _spawn(self, coro: Coroutine[Any, Any, Any]) -> None:
         self._browser._spawn(coro)

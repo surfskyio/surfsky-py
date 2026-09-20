@@ -53,18 +53,33 @@ waits for one of its own and raises `RateLimitError` only if it has none.
 ## Reading
 
 `selector` is CSS, or XPath when it starts with `//`, `..` or `xpath=`. XPath
-covers the DOM reads below and `screenshot(selector=)`; `inner_text`,
-`all_inner_texts`, `select_option` and the input methods take CSS only.
+covers the DOM reads below, `screenshot(selector=)`, `inner_text` and
+`select_option`; `all_inner_texts` and the input methods take CSS only.
+
+A selector with no match in the document's light DOM is looked up again inside
+every shadow root, open or closed, at any depth, so a widget built with
+`attachShadow({mode: "closed"})` is readable. A selector cannot span a shadow
+boundary: `.inner` finds the element, `#host .inner` does not. `all_inner_texts`
+and the cloud's selector input (`click`, `dblclick`, `hover`,
+`scroll_into_view`, `type`, `fill`) stay on the main document's light DOM, so
+click a pierced element by its box:
+
+```python
+box = await page.bounding_box("#inside-a-shadow-root")
+await page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+```
 
 | Method | Description |
 | --- | --- |
 | `url()`, `title()` | Current URL and title. |
 | `content()` | Full HTML. |
 | `outer_html(selector)` | HTML of the first match, `None` if none. |
-| `inner_text(selector)`, `all_inner_texts(selector)` | Rendered text of the first match, or of every match. Runs script in the isolated world. |
+| `inner_text(selector)` | Rendered text of the first match. Runs script on the node in the isolated world. |
+| `all_inner_texts(selector)` | Rendered text of every match. Runs one `querySelectorAll` script in the isolated world, so it sees the light DOM only. |
 | `get_attribute(selector, name)` | `None` if missing. |
 | `count(selector)` | Number of matches. |
 | `is_visible(selector)` | First match has a bounding box. |
+| `bounding_box(selector)` | `{x, y, width, height}` of the content box in page-viewport CSS pixels. `None` when nothing matches or it has no box. |
 | `wait_for_selector(selector, visible=True, timeout=30)` | Wait for the element, visible by default. |
 | `screenshot(selector=None, full_page=False, format="png", quality=None)` | Bytes. Viewport, one element or the full page. `format`: `png`, `jpeg`, `webp`. |
 
