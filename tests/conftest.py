@@ -29,3 +29,8 @@ class PostsViaSend:
 @pytest.fixture
 def client() -> Surfsky:
     return Surfsky(api_token="test-token", base_url="https://api.test")
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
