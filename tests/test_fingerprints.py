@@ -1,5 +1,3 @@
-import pytest
-
 _BASE = "https://api.test/fingerprint"
 
 
@@ -44,7 +42,6 @@ def test_device_models_with_no_filters_asks_for_everything(httpx_mock, client):
     assert not httpx_mock.get_requests()[0].url.params
 
 
-@pytest.mark.anyio
 async def test_async_device_models_sends_every_filter(httpx_mock):
     from surfsky import AsyncSurfsky
 

@@ -10,8 +10,6 @@ See https://docs.surfsky.io/screencast for the viewer.
 import asyncio
 from urllib.parse import urlencode, urlsplit
 
-import anyio
-
 from surfsky import AsyncSurfsky
 
 WATCH_SECONDS = 60
@@ -30,7 +28,7 @@ async def main() -> None:
 
         await browser.goto("https://example.com")
         print(f"watching for {WATCH_SECONDS}s")
-        await anyio.sleep(WATCH_SECONDS)
+        await asyncio.sleep(WATCH_SECONDS)
 
 
 if __name__ == "__main__":

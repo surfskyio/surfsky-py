@@ -1,3 +1,5 @@
+import asyncio
+import gc
 from datetime import UTC
 
 import httpx
@@ -13,7 +15,7 @@ from surfsky import (
     ServerError,
     Surfsky,
 )
-from surfsky.transport import retry_after_seconds
+from surfsky.transport import finish, retry_after_seconds
 
 
 def _make(**kwargs) -> Surfsky:
@@ -242,3 +244,49 @@ def test_a_malformed_api_token_is_an_authentication_error(httpx_mock):
     with pytest.raises(AuthenticationError):
         client.profiles.list_active()
     client.close()
+
+
+async def test_finish_outlasts_every_cancellation_and_then_raises_it():
+    done: list[str] = []
+
+    async def work() -> None:
+        await asyncio.sleep(0.05)
+        done.append("work")
+
+    waiter = asyncio.create_task(finish(work()))
+    for _ in range(3):
+        await asyncio.sleep(0.01)
+        waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    assert done == ["work"]
+
+
+async def test_finish_is_a_plain_await_when_nobody_cancels():
+    async def ok() -> str:
+        return "reply"
+
+    async def broken() -> str:
+        raise ValueError("no")
+
+    assert await finish(ok()) == "reply"
+    with pytest.raises(ValueError, match="no"):
+        await finish(broken())
+
+
+async def test_a_failure_behind_a_cancellation_reaches_no_error_handler():
+    reported: list[dict] = []
+    asyncio.get_running_loop().set_exception_handler(
+        lambda loop, context: reported.append(context)
+    )
+
+    async def broken() -> None:
+        await asyncio.sleep(0.02)
+        raise ValueError("no")
+
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.01):
+            await finish(broken())
+    await asyncio.sleep(0.03)
+    gc.collect()  # "never retrieved" is reported when the task is collected
+    assert reported == []

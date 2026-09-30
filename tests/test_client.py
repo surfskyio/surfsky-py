@@ -40,7 +40,6 @@ def test_with_options_clone_does_not_close_parent(httpx_mock, client: Surfsky):
     assert client.profiles.list_active() == []
 
 
-@pytest.mark.anyio
 async def test_async_with_options_clone_does_not_close_parent(httpx_mock):
     httpx_mock.add_response(
         method="GET", url="https://api.test/profiles/active",
@@ -116,7 +115,6 @@ def test_max_browsers_missing_endpoint_uses_default(
     assert client.account.max_browsers() == DEFAULT_MAX_BROWSERS
 
 
-@pytest.mark.anyio
 async def test_async_max_browsers_uses_endpoint(
     monkeypatch: pytest.MonkeyPatch, httpx_mock
 ):
@@ -217,7 +215,6 @@ _ASYNC_CALLS: list[tuple[str, tuple, dict, str, object]] = [
 ]
 
 
-@pytest.mark.anyio
 @pytest.mark.parametrize(
     ("dotted", "args", "kwargs", "expected", "data"),
     _ASYNC_CALLS,
@@ -237,7 +234,6 @@ async def test_async_resource_methods_reach_their_own_endpoint(
     assert (request.method, request.url.path) == (verb, path)
 
 
-@pytest.mark.anyio
 async def test_async_create_and_iter_all_reach_their_own_endpoints(httpx_mock):
     # the two that need a body of their own, kept out of the table above
     from surfsky import Fingerprint
@@ -252,7 +248,6 @@ async def test_async_create_and_iter_all_reach_their_own_endpoints(httpx_mock):
     assert (request.method, request.url.path) == ("POST", "/profiles")
 
 
-@pytest.mark.anyio
 async def test_async_max_browsers_takes_the_same_two_shortcuts_as_the_sync_one(
     monkeypatch: pytest.MonkeyPatch, httpx_mock
 ):

@@ -1,13 +1,18 @@
+import asyncio
 import copy
 import logging
 import os
 from collections.abc import AsyncIterator, Iterable, Iterator, Sequence
-from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
+from contextlib import (
+    AbstractAsyncContextManager,
+    asynccontextmanager,
+    contextmanager,
+    suppress,
+)
 from importlib.metadata import version
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Unpack
 
-import anyio
 import httpx
 
 from .errors import ConfigurationError
@@ -24,7 +29,7 @@ from .resources import (
     Proxies,
 )
 from .resources.profiles import SessionOptions
-from .transport import AUTH_HEADER, Spec, asend, send
+from .transport import AUTH_HEADER, Spec, asend, finish, send
 from .types import Session
 
 if TYPE_CHECKING:
@@ -50,13 +55,17 @@ def connection(api_token: str | None, base_url: str | None) -> tuple[str, dict[s
 
 async def stop_session(client: "AsyncSurfsky", internal_uuid: str) -> None:
     fast = client.with_options(timeout=8, max_retries=0)
-    with anyio.move_on_after(10, shield=True) as scope:
+
+    async def stop() -> None:
         try:
-            await fast.profiles.stop(internal_uuid)
+            async with asyncio.timeout(10):
+                await fast.profiles.stop(internal_uuid)
         except Exception as exc:
-            logger.warning(f"failed to stop session {internal_uuid}: {exc}")
-    if scope.cancelled_caught:
-        logger.warning(f"stopping session {internal_uuid} timed out; it may keep billing")
+            logger.warning(
+                f"failed to stop session {internal_uuid}: {exc!r}; it may keep billing"
+            )
+
+    await finish(stop())
 
 
 class Surfsky:
@@ -219,7 +228,16 @@ class AsyncSurfsky:
         return clone
 
     async def call[T](self, spec: Spec[T]) -> T:
-        return spec.result(await self._send(spec))
+        late: list[httpx.Response] = []
+        try:
+            return spec.result(await self._send(spec, late=late))
+        except asyncio.CancelledError:
+            for reply in late:
+                with suppress(Exception):
+                    started = spec.result(reply)
+                    if isinstance(started, Session):
+                        await stop_session(self, started.internal_uuid)
+            raise
 
     async def request(
         self,
@@ -245,7 +263,10 @@ class AsyncSurfsky:
         return await self._send(spec, headers)
 
     async def _send(
-        self, spec: Spec[Any], headers: dict[str, str] | None = None
+        self,
+        spec: Spec[Any],
+        headers: dict[str, str] | None = None,
+        late: list[httpx.Response] | None = None,
     ) -> httpx.Response:
         return await asend(
             self.http,
@@ -254,6 +275,7 @@ class AsyncSurfsky:
             backoff=self.backoff_factor,
             timeout=spec.timeout if self.timeout is None else self.timeout,
             headers={**self.headers, **(headers or {})} or None,
+            late=late,
         )
 
     @asynccontextmanager

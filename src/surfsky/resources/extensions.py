@@ -1,7 +1,6 @@
+import asyncio
 from pathlib import Path
 from typing import IO, TYPE_CHECKING
-
-from anyio import to_thread
 
 from ..transport import Spec, list_of, ref
 from ..types import Extension
@@ -84,7 +83,7 @@ class AsyncExtensions:
 
     async def upload(self, file: ExtensionFile, name: str) -> Extension:
         """Upload a ZIP (max 100 MB) given as a path, bytes or a binary stream."""
-        spec = await to_thread.run_sync(upload, file, name)  # the read blocks
+        spec = await asyncio.to_thread(upload, file, name)
         return await self.client.call(spec)
 
     async def list_all(self) -> list[Extension]:

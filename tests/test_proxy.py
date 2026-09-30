@@ -120,7 +120,6 @@ def test_resolve_rejects_async_factory_on_sync_client():
         resolve_proxy(factory)
 
 
-@pytest.mark.anyio
 async def test_aresolve_awaits_async_factory():
     async def factory():
         return SharedProxy(country="de")
@@ -152,7 +151,6 @@ def test_profile_start_accepts_proxy(httpx_mock, client):
     assert _sent_proxy(httpx_mock) == {"tier": "shared", "country": "us"}
 
 
-@pytest.mark.anyio
 async def test_async_start_accepts_async_factory(httpx_mock):
     async def factory():
         return SharedProxy()

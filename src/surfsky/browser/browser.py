@@ -5,12 +5,11 @@ from contextlib import asynccontextmanager, suppress
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Unpack
 
-import anyio
-
 from ..resources.profiles import SessionOptions
+from ..transport import finish
 from ..types import Session
 from .cdp import CDPClient, EventHandler
-from .page import POLL_INTERVAL, Page, deadline
+from .page import Page, deadline
 
 if TYPE_CHECKING:
     from ..client import AsyncSurfsky
@@ -101,6 +100,7 @@ class Browser(Page):
         self._client: CDPClient | None = None
         self._pages: dict[str, Page] = {}
         self._pending: set[asyncio.Task[None]] = set()
+        self._changed = asyncio.Event()
         self._retired = False
         self._use_count = 0
 
@@ -151,7 +151,7 @@ class Browser(Page):
         self._retired = True
 
     async def new_page(self) -> Page:
-        with deadline(self.command_timeout, "the new page did not open"):
+        async with deadline(self.command_timeout, "the new page did not open"):
             created = await self.cdp.send(
                 "Target.createTarget", {"url": "about:blank", "newWindow": True}
             )
@@ -169,11 +169,11 @@ class Browser(Page):
         after the click may still be this page.
         """
         before = set(self._pages)
-        with deadline(timeout, "no page opened"):
+        async with deadline(timeout, "no page opened"):
             await action
             while not (opened := [p for s, p in self._pages.items() if s not in before]):
                 self._require_open()
-                await anyio.sleep(POLL_INTERVAL)
+                await self._change()
         return opened[-1]
 
     async def connect(self) -> None:
@@ -183,8 +183,9 @@ class Browser(Page):
         Page.__init__(self, self, "", "")
         self.on_dialog = handler
         self._pages = {}
+        self._changed = asyncio.Event()
         try:
-            with deadline(self.connect_timeout, "could not connect"):
+            async with deadline(self.connect_timeout, "could not connect"):
                 self._client = client = CDPClient(
                     self.session.ws_url, on_close=self._on_disconnect
                 )
@@ -210,17 +211,21 @@ class Browser(Page):
             raise
 
     async def close(self) -> None:
-        with anyio.move_on_after(5, shield=True):
-            pending, self._pending = list(self._pending), set()
-            for task in pending:
-                task.cancel()
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
-            client, self._client = self._client, None
-            if client is not None:
-                with suppress(Exception):
-                    await client.stop()
-        self._closed = True
+        async def stop() -> None:
+            with suppress(TimeoutError):
+                async with asyncio.timeout(5):
+                    pending, self._pending = list(self._pending), set()
+                    for task in pending:
+                        task.cancel()
+                    if pending:
+                        await asyncio.gather(*pending, return_exceptions=True)
+                    client, self._client = self._client, None
+                    if client is not None:
+                        with suppress(Exception):
+                            await client.stop()
+            self._closed = True
+
+        await finish(stop())
 
     async def __aenter__(self) -> "Browser":
         await self.connect()
@@ -240,12 +245,12 @@ class Browser(Page):
                 await page.close()
         await self.stop_capturing()
         self.on_dialog = None
-        with deadline(self.command_timeout, "the browser did not answer"):
+        async with deadline(self.command_timeout, "the browser did not answer"):
             await self.cdp.send("Browser.getVersion")
 
     async def _page_ready(self, target_id: str) -> Page:
         while (page := self._page_for(target_id)) is None:
-            await anyio.sleep(POLL_INTERVAL)
+            await self._change()
         await page._wait_ready()
         return page
 
@@ -266,12 +271,13 @@ class Browser(Page):
             page = self
             self._target_id, self._session_id = info["targetId"], session
         page._frame_id = page._target_id  # the page target's main frame
-        page._ready = anyio.Event()  # commands on it wait for the setup
+        page._ready = asyncio.Event()
         self._pages[session] = page
+        self._changed.set()
         self._spawn(page._setup(waiting))
 
     async def _let_go(self, session: str, waiting: bool) -> None:
-        with deadline(self.command_timeout, "the target did not let go"):
+        async with deadline(self.command_timeout, "the target did not let go"):
             if waiting:
                 await self.cdp.send("Runtime.runIfWaitingForDebugger", session_id=session)
             await self.cdp.send("Target.detachFromTarget", {"sessionId": session})
@@ -286,6 +292,7 @@ class Browser(Page):
     def _drop(self, page: Page) -> None:
         self._pages.pop(page._session_id, None)
         page._closed = True
+        self._changed.set()
         if page._waiter is not None:
             page._waiter.fail("page closed")
         if page is self:
@@ -300,6 +307,7 @@ class Browser(Page):
         return route
 
     def _on_disconnect(self) -> None:
+        self._changed.set()
         for page in self._pages.values():
             page._closed = True
             if page._waiter is not None:
@@ -312,8 +320,8 @@ class Browser(Page):
 
     def _reap(self, task: asyncio.Task[Any]) -> None:
         self._pending.discard(task)
-        if not task.cancelled():
-            task.exception()
+        if not task.cancelled() and (error := task.exception()) is not None:
+            logger.debug(f"a command sent from an event handler failed: {error}")
 
 
 @asynccontextmanager

@@ -1,14 +1,13 @@
+import asyncio
 import base64
 import json
 import logging
 import random
 import re
-from collections.abc import Callable, Coroutine, Iterator, Mapping, Sequence
-from contextlib import contextmanager, suppress
+from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
-
-import anyio
 
 from ..errors import BrowserTimeoutError, PageClosedError
 from ..types import Cookie, WaitUntil
@@ -94,10 +93,10 @@ def command_failed(method: str, params: dict[str, Any] | None, exc: CDPError) ->
     return CDPError(f"{where}: {exc}", code=exc.code)
 
 
-@contextmanager
-def deadline(timeout: float | None, message: str) -> Iterator[None]:
+@asynccontextmanager
+async def deadline(timeout: float | None, message: str) -> AsyncIterator[None]:
     try:
-        with anyio.fail_after(timeout):
+        async with asyncio.timeout(timeout):
             yield
     except TimeoutError as exc:
         if isinstance(exc, BrowserTimeoutError):
@@ -125,7 +124,7 @@ class NavWaiter:
 
     def __init__(self, milestone: str) -> None:
         self.milestone = milestone
-        self.done = anyio.Event()
+        self.done = asyncio.Event()
         self.error: str | None = None
         self.loader_id: str | None = None
         self.created: list[str] = []
@@ -173,7 +172,7 @@ class Page(Actions):
         self._loader_id: str | None = None  # the main frame's newest document
         self._milestones: set[str] = set()  # the lifecycle events it reached
         self._world_id: int | None = None  # the isolated world's context
-        self._ready = anyio.Event()
+        self._ready = asyncio.Event()
         self._ready.set()
         self._setup_error: Exception | None = None
         self._waiter: NavWaiter | None = None
@@ -209,7 +208,7 @@ class Page(Actions):
             raise PageClosedError("page is closed")
 
     async def _send(self, method: str, params: dict[str, Any] | None = None) -> Any:
-        with deadline(self._browser.command_timeout, f"{method} did not answer"):
+        async with deadline(self._browser.command_timeout, f"{method} did not answer"):
             try:
                 return await self.cdp.send(method, params, session_id=self._session_id)
             except CDPError as exc:
@@ -219,6 +218,13 @@ class Page(Actions):
         await self._ready.wait()
         if self._setup_error is not None:
             raise self._setup_error
+
+    async def _change(self) -> None:
+        changed = self._browser._changed
+        changed.clear()
+        with suppress(TimeoutError):
+            async with asyncio.timeout(POLL_INTERVAL):
+                await changed.wait()
 
     async def _setup(self, waiting: bool) -> None:
         commands: list[tuple[str, dict[str, Any] | None]] = [
@@ -232,7 +238,7 @@ class Page(Actions):
             commands.append(("Runtime.runIfWaitingForDebugger", None))
         posted: list[tuple[int, Any]] = []
         try:
-            with deadline(self._browser.command_timeout, "the page was not ready"):
+            async with deadline(self._browser.command_timeout, "the page was not ready"):
                 posted = [await self.cdp.post(*c, self._session_id) for c in commands]
                 for (method, params), (_, reply) in zip(commands, posted, strict=True):
                     try:
@@ -249,7 +255,7 @@ class Page(Actions):
     async def close(self) -> None:
         if self._closed:
             return
-        with deadline(self._browser.command_timeout, "the page did not close"):
+        async with deadline(self._browser.command_timeout, "the page did not close"):
             await self.cdp.send("Target.closeTarget", {"targetId": self._target_id})
         self._browser._drop(self)
 
@@ -260,10 +266,10 @@ class Page(Actions):
         self, state: WaitUntil = "load", *, timeout: float = 30.0
     ) -> None:
         milestone = LIFECYCLE_EVENT[state]
-        with deadline(timeout, f"the page did not reach {state!r}"):
+        async with deadline(timeout, f"the page did not reach {state!r}"):
             while milestone not in self._milestones:
                 self._require_open()
-                await anyio.sleep(POLL_INTERVAL)
+                await self._change()
 
     async def goto(
         self, url: str, *, wait_until: WaitUntil = "load", timeout: float = 30.0
@@ -273,7 +279,9 @@ class Page(Actions):
         self._waiter = waiter = NavWaiter(LIFECYCLE_EVENT[wait_until])
         self._status = None  # a failed navigation must not keep the last one's
         try:
-            with deadline(timeout, f"navigation to {url} did not reach {wait_until!r}"):
+            async with deadline(
+                timeout, f"navigation to {url} did not reach {wait_until!r}"
+            ):
                 result = await self.send("Page.navigate", {"url": url})
                 if result.get("errorText"):
                     raise CDPError(f"navigation to {url} failed: {result['errorText']}")
@@ -296,7 +304,7 @@ class Page(Actions):
         self._waiter = waiter = NavWaiter(LIFECYCLE_EVENT[wait_until])
         self._status = None
         try:
-            with deadline(timeout, f"reload did not reach {wait_until!r}"):
+            async with deadline(timeout, f"reload did not reach {wait_until!r}"):
                 await self.send("Page.reload")
                 if not waiter.follow_newest():
                     await waiter.done.wait()
@@ -319,12 +327,12 @@ class Page(Actions):
         if not 0 <= index < len(entries):
             return None
         await self.send("Page.navigateToHistoryEntry", {"entryId": entries[index]["id"]})
-        with deadline(timeout, "history did not move"):
+        async with deadline(timeout, "history did not move"):
             while True:
                 moved = await self.send("Page.getNavigationHistory")
                 if moved["currentIndex"] == index:
                     break
-                await anyio.sleep(POLL_INTERVAL)
+                await asyncio.sleep(POLL_INTERVAL)
         return await self.url()
 
     @property
@@ -347,13 +355,13 @@ class Page(Actions):
     ) -> CapturedResponse:
         if not self._captures:
             raise RuntimeError("call capture_responses() before the navigation")
-        with deadline(timeout, f"no response matching {fragment!r}"):
+        async with deadline(timeout, f"no response matching {fragment!r}"):
             while True:
                 for response in self._responses:
                     if fragment in response.url:
                         return response
                 self._require_open()
-                await anyio.sleep(POLL_INTERVAL)
+                await self._change()
 
     def _on_response(self, event: dict[str, Any]) -> None:
         response = event.get("response") or {}
@@ -386,6 +394,7 @@ class Page(Actions):
                 body=body,
             )
         )
+        self._browser._changed.set()
 
     async def local_storage(self) -> dict[str, str]:
         return await self._storage(local=True)
@@ -512,11 +521,11 @@ class Page(Actions):
     async def wait_for_function(
         self, expression: str, *args: Any, isolated: bool = True, timeout: float = 30.0
     ) -> Any:
-        with deadline(timeout, f"{expression!r} was not truthy"):
+        async with deadline(timeout, f"{expression!r} was not truthy"):
             while not (
                 value := await self.evaluate(expression, *args, isolated=isolated)
             ):
-                await anyio.sleep(POLL_INTERVAL)
+                await asyncio.sleep(POLL_INTERVAL)
         return value
 
     async def inner_text(self, selector: str) -> str | None:
@@ -597,9 +606,9 @@ class Page(Actions):
         self, selector: str, *, visible: bool = True, timeout: float = 30.0
     ) -> None:
         state = "visible" if visible else "in the document"
-        with deadline(timeout, f"{selector!r} was not {state}"):
+        async with deadline(timeout, f"{selector!r} was not {state}"):
             while not await self._matches(selector, visible):
-                await anyio.sleep(POLL_INTERVAL)
+                await asyncio.sleep(POLL_INTERVAL)
 
     async def _matches(self, selector: str, visible: bool) -> bool:
         # Node ids belong to one document, so a navigation between the lookups
@@ -638,6 +647,7 @@ class Page(Actions):
             {"query": xpath or selector, "includeUserAgentShadowDOM": False},
         )
         search_id, total = found["searchId"], found.get("resultCount") or 0
+        cancelled = False
         try:
             if not total:
                 return []
@@ -655,20 +665,24 @@ class Page(Actions):
 
             await self._world()
             try:
-                async with anyio.create_task_group() as group:
+                async with asyncio.TaskGroup() as group:
                     for index, node_id in enumerate(node_ids):
-                        group.start_soon(check, index, node_id)
+                        group.create_task(check(index, node_id))
             except ExceptionGroup as failures:
                 raise failures.exceptions[0] from None
             return [n for n, ok in zip(node_ids, keep, strict=True) if ok]
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
         finally:
-            with suppress(Exception):
-                await self.send("DOM.discardSearchResults", {"searchId": search_id})
+            if not cancelled:
+                with suppress(Exception):
+                    await self.send("DOM.discardSearchResults", {"searchId": search_id})
 
     async def wait_for_url(self, fragment: str, *, timeout: float = 30.0) -> str:
-        with deadline(timeout, f"the page did not reach {fragment!r}"):
+        async with deadline(timeout, f"the page did not reach {fragment!r}"):
             while fragment not in (url := await self.url()):
-                await anyio.sleep(POLL_INTERVAL)
+                await asyncio.sleep(POLL_INTERVAL)
         return url
 
     async def is_visible(self, selector: str) -> bool:
@@ -748,6 +762,7 @@ class Page(Actions):
             self._milestones.add(name)
         elif self._loader_id is None:  # replayed on attach: the document found there
             self._loader_id, self._milestones = loader_id, {name}
+        self._browser._changed.set()
         if self._waiter is not None:
             self._waiter.observe(name, loader_id)
 
@@ -774,7 +789,7 @@ class Page(Actions):
         self._spawn(self._answer_dialog(params))
 
     async def _answer_dialog(self, params: dict[str, Any]) -> None:
-        await anyio.sleep(random.uniform(*DIALOG_DELAY))  # as a person would
+        await asyncio.sleep(random.uniform(*DIALOG_DELAY))
         await self._send("Page.handleJavaScriptDialog", params)
 
     def _on_request_paused(self, event: dict[str, Any]) -> None:

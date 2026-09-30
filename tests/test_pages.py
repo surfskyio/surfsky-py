@@ -120,7 +120,6 @@ class PausedCDP(AttachingCDP):
         return await reply
 
 
-@pytest.mark.anyio
 async def test_a_paused_popup_does_not_deadlock_on_its_own_pause(monkeypatch):
     # a window the page opens attaches paused and answers nothing until it is
     # resumed; a setup that awaited Page.enable first would hang until the
@@ -154,7 +153,6 @@ async def settle() -> None:
     await asyncio.sleep(0.01)  # let spawned handler tasks run
 
 
-@pytest.mark.anyio
 async def test_connect_takes_the_first_web_page_through_auto_attach(cdp):
     async with make_browser() as browser:
         [(attach, on_browser)] = cdp.sent("Target.setAutoAttach")
@@ -168,7 +166,6 @@ async def test_connect_takes_the_first_web_page_through_auto_attach(cdp):
         assert "Target.attachToTarget" not in [m for m, _, _ in cdp.calls]
 
 
-@pytest.mark.anyio
 async def test_connect_creates_a_page_when_the_session_has_none(cdp):
     cdp.targets = []
     async with make_browser() as browser:
@@ -177,7 +174,6 @@ async def test_connect_creates_a_page_when_the_session_has_none(cdp):
         assert browser.pages == [browser]
 
 
-@pytest.mark.anyio
 async def test_targets_that_are_not_web_pages_are_let_go(cdp):
     cdp.targets = [
         {"type": "page", "targetId": "EXT", "url": "chrome-extension://abc/options.html"},
@@ -194,7 +190,6 @@ async def test_targets_that_are_not_web_pages_are_let_go(cdp):
         ]
 
 
-@pytest.mark.anyio
 async def test_the_startup_tab_is_reused_not_replaced(cdp):
     cdp.targets = [{"type": "page", "targetId": "T", "url": "chrome://newtab/"}]
     async with make_browser() as browser:
@@ -204,7 +199,6 @@ async def test_the_startup_tab_is_reused_not_replaced(cdp):
         assert "Target.createTarget" not in [method for method, _, _ in cdp.calls]
 
 
-@pytest.mark.anyio
 async def test_a_decorated_startup_tab_is_still_the_startup_tab(cdp):
     cdp.targets = [{"type": "page", "targetId": "T", "url": "chrome://new-tab-page/?x=1"}]
     async with make_browser() as browser:
@@ -213,7 +207,6 @@ async def test_a_decorated_startup_tab_is_still_the_startup_tab(cdp):
         assert "Target.createTarget" not in [method for method, _, _ in cdp.calls]
 
 
-@pytest.mark.anyio
 async def test_a_start_page_opened_after_connect_is_let_go(cdp):
     async with make_browser() as browser:
         cdp.attach({"type": "page", "targetId": "N", "url": "chrome://newtab/"})
@@ -222,7 +215,6 @@ async def test_a_start_page_opened_after_connect_is_let_go(cdp):
         assert cdp.sent("Target.detachFromTarget") == [({"sessionId": "S2"}, None)]
 
 
-@pytest.mark.anyio
 async def test_another_chrome_page_is_still_let_go(cdp):
     cdp.targets = [{"type": "page", "targetId": "SET", "url": "chrome://settings/"}, MAIN]
     async with make_browser() as browser:
@@ -231,7 +223,6 @@ async def test_another_chrome_page_is_still_let_go(cdp):
         assert cdp.sent("Target.detachFromTarget") == [({"sessionId": "S1"}, None)]
 
 
-@pytest.mark.anyio
 async def test_a_let_go_that_never_answers_gives_up(cdp):
     cdp.delay["Target.detachFromTarget"] = 5
     async with make_browser(command_timeout=0.05) as browser:
@@ -242,7 +233,6 @@ async def test_a_let_go_that_never_answers_gives_up(cdp):
             await asyncio.wait_for(let_go, 1)
 
 
-@pytest.mark.anyio
 async def test_a_paused_target_that_is_not_ours_is_resumed_before_it_is_let_go(cdp):
     async with make_browser():
         cdp.attach({"type": "service_worker", "targetId": "SW", "url": ""}, waiting=True)
@@ -251,7 +241,6 @@ async def test_a_paused_target_that_is_not_ours_is_resumed_before_it_is_let_go(c
         assert cdp.sent("Target.detachFromTarget") == [({"sessionId": "S2"}, None)]
 
 
-@pytest.mark.anyio
 async def test_a_popup_is_listed_and_driven_on_its_own_session(cdp):
     async with make_browser() as browser:
         cdp.attach(POPUP, waiting=True)
@@ -264,7 +253,6 @@ async def test_a_popup_is_listed_and_driven_on_its_own_session(cdp):
         assert cdp.sent("Human.click") == [({"selector": "#go"}, "S2")]
 
 
-@pytest.mark.anyio
 async def test_a_paused_popup_is_set_up_before_it_runs_and_before_it_is_driven(cdp):
     async with make_browser() as browser:
         cdp.delay["Network.enable"] = 0.02
@@ -279,7 +267,6 @@ async def test_a_paused_popup_is_set_up_before_it_runs_and_before_it_is_driven(c
         ]
 
 
-@pytest.mark.anyio
 async def test_a_popup_whose_setup_failed_says_so_when_used(cdp):
     async with make_browser() as browser:
         cdp.rejected["Network.enable"] = "S2"
@@ -289,7 +276,6 @@ async def test_a_popup_whose_setup_failed_says_so_when_used(cdp):
         assert browser.connected  # the main page is unaffected
 
 
-@pytest.mark.anyio
 async def test_new_page_opens_a_window_and_returns_it_ready(cdp):
     async with make_browser() as browser:
         page = await browser.new_page()
@@ -301,7 +287,6 @@ async def test_new_page_opens_a_window_and_returns_it_ready(cdp):
         assert ("Runtime.runIfWaitingForDebugger", {}, "S2") in cdp.calls
 
 
-@pytest.mark.anyio
 async def test_goto_on_a_popup_waits_for_its_own_document(cdp):
     async with make_browser() as browser:
         cdp.attach(POPUP)
@@ -311,7 +296,6 @@ async def test_goto_on_a_popup_waits_for_its_own_document(cdp):
         assert browser._waiter is None and popup._waiter is None
 
 
-@pytest.mark.anyio
 async def test_a_blocked_request_in_a_popup_is_answered_on_the_popup_session(cdp):
     async with make_browser(block_resources={"image"}) as browser:
         cdp.attach(POPUP)
@@ -326,7 +310,6 @@ async def test_a_blocked_request_in_a_popup_is_answered_on_the_popup_session(cdp
         assert (popup.status, browser.status) == (503, None)
 
 
-@pytest.mark.anyio
 async def test_a_popup_the_site_closes_drops_out_and_refuses_commands(cdp):
     async with make_browser() as browser:
         session = cdp.attach(POPUP)
@@ -339,7 +322,6 @@ async def test_a_popup_the_site_closes_drops_out_and_refuses_commands(cdp):
             await popup.title()
 
 
-@pytest.mark.anyio
 async def test_a_crashed_popup_counts_as_closed(cdp):
     async with make_browser() as browser:
         cdp.attach(POPUP)
@@ -349,7 +331,6 @@ async def test_a_crashed_popup_counts_as_closed(cdp):
         assert browser.pages == [browser]
 
 
-@pytest.mark.anyio
 async def test_the_main_page_going_away_still_retires_the_browser(cdp):
     async with make_browser() as browser:
         cdp.attach(POPUP)
@@ -358,7 +339,6 @@ async def test_the_main_page_going_away_still_retires_the_browser(cdp):
         assert browser.pages == [browser.pages[0]] and browser.pages[0].target_id == "P"
 
 
-@pytest.mark.anyio
 async def test_close_closes_the_target(cdp):
     async with make_browser() as browser:
         cdp.attach(POPUP)
@@ -371,7 +351,6 @@ async def test_close_closes_the_target(cdp):
         assert len(cdp.sent("Target.closeTarget")) == 1
 
 
-@pytest.mark.anyio
 async def test_close_and_new_page_time_out_as_browser_timeouts(cdp):
     async with make_browser(command_timeout=0.05) as browser:
         cdp.attach(POPUP)
@@ -383,7 +362,6 @@ async def test_close_and_new_page_time_out_as_browser_timeouts(cdp):
             await browser.new_page()
 
 
-@pytest.mark.anyio
 async def test_wait_for_page_returns_what_the_action_opened(cdp):
     async with make_browser() as browser:
         cdp.attach(POPUP)  # already open: not the one wanted
@@ -396,7 +374,6 @@ async def test_wait_for_page_returns_what_the_action_opened(cdp):
         assert popup.target_id == "P2" and browser.pages[-1] is popup
 
 
-@pytest.mark.anyio
 async def test_wait_for_page_takes_a_page_that_attached_during_the_action(cdp):
     async with make_browser() as browser:
 
@@ -407,7 +384,6 @@ async def test_wait_for_page_takes_a_page_that_attached_during_the_action(cdp):
         assert popup.target_id == "P" and popup is not browser
 
 
-@pytest.mark.anyio
 async def test_wait_for_page_times_out_as_a_browser_timeout(cdp):
     async with make_browser() as browser:
 
@@ -418,7 +394,39 @@ async def test_wait_for_page_times_out_as_a_browser_timeout(cdp):
             await browser.wait_for_page(nothing(), timeout=0.05)
 
 
-@pytest.mark.anyio
+async def test_local_waits_wake_on_the_event_not_on_the_next_tick(cdp, monkeypatch):
+    monkeypatch.setattr(page_mod, "POLL_INTERVAL", 5)
+    loop = asyncio.get_running_loop()
+    async with make_browser() as browser:
+        later = {"type": "page", "targetId": "P2", "url": ""}
+
+        async def click() -> None:
+            loop.call_later(0.02, cdp.attach, later)
+
+        async with asyncio.timeout(1):
+            popup = await browser.wait_for_page(click(), timeout=10)
+            assert popup.target_id == "P2"
+
+            loop.call_later(
+                0.02,
+                cdp.handlers["Page.lifecycleEvent"],
+                {"name": "load", "frameId": "P2", "loaderId": "L"},
+                popup._session_id,
+            )
+            await popup.wait_for_load_state(timeout=10)
+
+            wait = asyncio.create_task(popup.wait_for_load_state("networkidle", timeout=10))
+            loop.call_later(0.02, cdp.detach, popup._session_id, "P2")
+            with pytest.raises(PageClosedError):
+                await wait
+
+
+async def test_a_local_wait_still_notices_what_no_handler_reported(cdp):
+    async with make_browser() as browser:
+        asyncio.get_running_loop().call_later(0.02, browser._milestones.add, "load")
+        await browser.wait_for_load_state(timeout=1)
+
+
 async def test_bring_to_front_activates_the_page(cdp):
     async with make_browser() as browser:
         cdp.attach(POPUP)
@@ -426,7 +434,6 @@ async def test_bring_to_front_activates_the_page(cdp):
         assert cdp.sent("Page.bringToFront") == [({}, "S2")]
 
 
-@pytest.mark.anyio
 async def test_a_dropped_connection_fails_every_page_navigation(cdp):
     async with make_browser() as browser:
         cdp.attach(POPUP)
@@ -444,7 +451,6 @@ def no_dialog_pause(monkeypatch) -> None:
     monkeypatch.setattr(page_mod, "DIALOG_DELAY", (0.0, 0.0))
 
 
-@pytest.mark.anyio
 async def test_a_dialog_is_answered_after_a_human_pause(cdp, monkeypatch):
     # alert() returning the instant it opened is a tell
     monkeypatch.setattr(page_mod, "DIALOG_DELAY", (0.05, 0.05))
@@ -456,7 +462,6 @@ async def test_a_dialog_is_answered_after_a_human_pause(cdp, monkeypatch):
         assert cdp.sent("Page.handleJavaScriptDialog") == [({"accept": False}, "S1")]
 
 
-@pytest.mark.anyio
 async def test_dialogs_are_dismissed_and_beforeunload_accepted(cdp, no_dialog_pause):
     # an open dialog would otherwise hang every command until the timeout
     async with make_browser():
@@ -471,7 +476,6 @@ async def test_dialogs_are_dismissed_and_beforeunload_accepted(cdp, no_dialog_pa
         ]
 
 
-@pytest.mark.anyio
 async def test_on_dialog_decides_and_can_answer_a_prompt(cdp, no_dialog_pause):
     async with make_browser() as browser:
         seen: list[tuple[str, str]] = []
@@ -493,7 +497,6 @@ async def test_on_dialog_decides_and_can_answer_a_prompt(cdp, no_dialog_pause):
         ]
 
 
-@pytest.mark.anyio
 async def test_wait_for_load_knows_the_state_chrome_replays_on_attach(cdp):
     # enabling lifecycle events replays the current document's milestones
     async with make_browser() as browser:
@@ -502,7 +505,6 @@ async def test_wait_for_load_knows_the_state_chrome_replays_on_attach(cdp):
         await browser.wait_for_load_state(timeout=0.5)
 
 
-@pytest.mark.anyio
 async def test_wait_for_load_waits_for_the_newest_document(cdp):
     async with make_browser() as browser:
         lifecycle = cdp.handlers["Page.lifecycleEvent"]
@@ -519,7 +521,6 @@ async def test_wait_for_load_waits_for_the_newest_document(cdp):
         await browser.wait_for_load_state(timeout=0.5)
 
 
-@pytest.mark.anyio
 async def test_a_wait_on_a_page_the_site_closes_ends_at_once(cdp):
     # wait_for_load_state only watches local state: without the check it ran to
     # its deadline after the popup was gone

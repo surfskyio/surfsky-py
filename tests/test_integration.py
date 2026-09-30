@@ -76,7 +76,6 @@ def _session_endpoints(httpx_mock, count: int) -> None:
         )
 
 
-@pytest.mark.anyio
 async def test_map_drives_real_browsers_end_to_end(httpx_mock, cdp):
     httpx_mock.add_response(
         method="GET", url="https://api.test/users/browser-limits",
@@ -105,7 +104,6 @@ async def test_map_drives_real_browsers_end_to_end(httpx_mock, cdp):
     assert len(stops) == len(starts)  # every paid session was stopped
 
 
-@pytest.mark.anyio
 async def test_retire_and_stop_run_travel_the_whole_stack(httpx_mock, cdp):
     httpx_mock.add_response(
         method="GET", url="https://api.test/users/browser-limits",
@@ -138,7 +136,6 @@ async def test_retire_and_stop_run_travel_the_whole_stack(httpx_mock, cdp):
     assert len(starts) == len(stops) == 2  # nothing started after the stop
 
 
-@pytest.mark.anyio
 async def test_session_options_reach_the_wire_through_the_pool(httpx_mock, cdp):
     from surfsky import SharedProxy
 

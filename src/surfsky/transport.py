@@ -1,6 +1,7 @@
+import asyncio
 import logging
 import random
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -141,25 +142,54 @@ async def asend(
     backoff: float,
     timeout: float | None = None,
     headers: dict[str, str] | None = None,
+    late: list[httpx.Response] | None = None,
 ) -> httpx.Response:
     async def attempt() -> httpx.Response:
-        with anyio.CancelScope(shield=spec.shield):
-            return await http.request(
-                spec.method,
-                spec.path,
-                json=spec.json,
-                params=spec.params,
-                files=spec.files,
-                data=spec.data,
-                headers=headers,
-                timeout=httpx.USE_CLIENT_DEFAULT if timeout is None else timeout,
-            )
+        request = http.request(
+            spec.method,
+            spec.path,
+            json=spec.json,
+            params=spec.params,
+            files=spec.files,
+            data=spec.data,
+            headers=headers,
+            timeout=httpx.USE_CLIENT_DEFAULT if timeout is None else timeout,
+        )
+        if not spec.shield:
+            return await request
+        sent = asyncio.create_task(request)
+        try:
+            return await finish(sent)
+        except asyncio.CancelledError:
+            if late is not None and not sent.cancelled() and sent.exception() is None:
+                late.append(sent.result())
+            raise
 
     policy = retry_policy(spec, retries, backoff)
     try:
-        return await AsyncRetrying(sleep=anyio.sleep, **policy)(attempt)
+        return await AsyncRetrying(sleep=asyncio.sleep, **policy)(attempt)
     except httpx.TransportError as exc:
         raise network_error(spec.path, exc) from exc
+
+
+async def finish[T](work: Coroutine[Any, Any, T] | asyncio.Future[T]) -> T:
+    done: list[T] = []
+    failed: list[Exception] = []
+
+    async def run() -> None:
+        with anyio.CancelScope(shield=True):
+            try:
+                done.append(await work)
+            except Exception as exc:
+                failed.append(exc)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(run)
+    if failed:
+        raise failed[0]
+    if not done:
+        raise asyncio.CancelledError
+    return done[0]
 
 
 def retry_policy(spec: Spec[Any], retries: int, backoff: float) -> dict[str, Any]:

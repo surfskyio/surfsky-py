@@ -38,6 +38,7 @@ examples = [
 ]
 dev = [
     "pytest>=8.3",
+    "pytest-asyncio>=1.4.0",
     "pytest-httpx>=0.30",
     "ruff>=0.6",
     "ty>=0.0.56",
@@ -55,7 +56,7 @@ include = ["src", "tests", "examples"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["anyio: run the test on the anyio event loop"]
+asyncio_mode = "auto"
 
 [tool.ruff]
 target-version = "py312"
@@ -64,18 +65,12 @@ src = ["src", "tests"]
 extend-exclude = ["vendor"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM", "TID251"]
+select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = ["E501"]
-
-[tool.ruff.lint.flake8-tidy-imports.banned-api]
-"asyncio".msg = "use anyio; bare asyncio is allowed only in browser/cdp.py and browser/browser.py"
 
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["F401", "F403"]
-"tests/*" = ["B", "SIM", "TID251"]
-"examples/*" = ["TID251"]
-"src/surfsky/browser/cdp.py" = ["TID251"]
-"src/surfsky/browser/browser.py" = ["TID251"]
+"tests/*" = ["B", "SIM"]
 
 [tool.ty.environment]
 python-version = "3.12"

@@ -1,9 +1,9 @@
+import asyncio
 import json
 
-import anyio
-import httpx
 import pytest
 
+from conftest import both_ways, cancelled_after, session_endpoints
 from surfsky import APIError, BadRequestError, Fingerprint
 
 
@@ -209,7 +209,6 @@ def test_iter_all_clamps_zero_page_len(httpx_mock, client):
     assert requests[0].url.params["page_len"] == "1"
 
 
-@pytest.mark.anyio
 async def test_async_iter_all_paginates(httpx_mock):
     from surfsky import AsyncSurfsky
 
@@ -238,7 +237,6 @@ def test_cookie_export_import_round_trip(httpx_mock, client):
 
     body = json.loads(httpx_mock.get_requests()[1].content)
     sent = json.loads(body["cookies"])
-    # wire format is camelCase
     assert sent[0]["expirationDate"] == 123.0
     assert sent[0]["httpOnly"] is True
     assert "expiration_date" not in sent[0]
@@ -272,7 +270,6 @@ def test_session_context_manager_starts_and_stops(httpx_mock, client):
     ]
 
 
-@pytest.mark.anyio
 async def test_async_session_stop_failure_logs_instead_of_raising(httpx_mock, caplog):
     from surfsky import AsyncSurfsky
 
@@ -292,29 +289,47 @@ async def test_async_session_stop_failure_logs_instead_of_raising(httpx_mock, ca
     assert any("failed to stop session s3" in r.message for r in caplog.records)
 
 
-@pytest.mark.anyio
-async def test_async_session_start_is_not_lost_to_cancellation(httpx_mock):
-    # a cancellation mid-POST must not orphan the session the server created
+@both_ways
+async def test_async_session_start_is_not_lost_to_cancellation(httpx_mock, the_anyio_way):
     from surfsky import AsyncSurfsky
 
-    async def slow_start(request: httpx.Request) -> httpx.Response:
-        await anyio.sleep(0.05)
-        return httpx.Response(200, json={"internal_uuid": "s9", "ws_url": "wss://x"})
-
-    httpx_mock.add_callback(
-        slow_start, method="POST", url="https://api.test/profiles/one_time"
-    )
-    httpx_mock.add_response(
-        method="POST", url="https://api.test/profiles/s9/stop",
-        json={"success": True, "data": None},
-    )
+    session_endpoints(httpx_mock, start_delay=0.05)
     async with AsyncSurfsky(api_token="t", base_url="https://api.test") as client:
-        with anyio.move_on_after(0.01) as scope:
+        async with cancelled_after(0.01, the_anyio_way):
             async with client.session():
-                await anyio.sleep(1)  # pragma: no cover - cancelled before this returns
-    assert scope.cancelled_caught
+                await asyncio.sleep(1)  # pragma: no cover
     paths = [r.url.path for r in httpx_mock.get_requests()]
     assert paths == ["/profiles/one_time", "/profiles/s9/stop"]
+
+
+async def test_a_bare_start_cancelled_mid_post_leaves_no_session(httpx_mock):
+    from surfsky import AsyncSurfsky
+
+    session_endpoints(httpx_mock, start_delay=0.05)
+    async with AsyncSurfsky(api_token="t", base_url="https://api.test") as client:
+        start = asyncio.create_task(client.profiles.start_one_time())
+        await asyncio.sleep(0.01)
+        start.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await start
+    paths = [r.url.path for r in httpx_mock.get_requests()]
+    assert paths == ["/profiles/one_time", "/profiles/s9/stop"]
+
+
+async def test_a_start_cancelled_between_retries_stops_retrying(httpx_mock):
+    from surfsky import AsyncSurfsky
+
+    httpx_mock.add_response(
+        method="POST", url="https://api.test/profiles/one_time",
+        status_code=429, headers={"Retry-After": "5"}, json={"msg": "slow down"},
+    )
+    async with AsyncSurfsky(api_token="t", base_url="https://api.test") as client:
+        started = asyncio.get_running_loop().time()
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(0.05):
+                await client.profiles.start_one_time()
+        assert asyncio.get_running_loop().time() - started < 1
+    assert len(httpx_mock.get_requests()) == 1
 
 
 def test_stop_and_scrape_accept_a_session_object(httpx_mock, client):

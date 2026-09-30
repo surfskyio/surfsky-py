@@ -11,6 +11,7 @@ gives each a fresh fingerprint and stops every paid session on the way out.
 ``map()`` is a thin wrapper over the lease for the common case.
 """
 
+import asyncio
 import copy
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
@@ -19,13 +20,11 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal, Unpack
 
-import anyio
-
 from ..client import stop_session
 from ..errors import RateLimitError
 from ..proxy import validate_proxy
 from ..resources.profiles import SessionOptions
-from ..transport import PLAN_FULL
+from ..transport import PLAN_FULL, finish
 from ..types import OneTimeStartRequest
 from .browser import Browser, normalize_blocked, normalize_urls
 
@@ -76,16 +75,16 @@ class BrowserPool:
         self._owned = 0
         self._plan_full = False
         self._plan_full_error: Exception | None = None
-        self._cond = anyio.Condition()
+        self._changed = asyncio.Event()
         self._capacity = 0
-        self._slots: anyio.Semaphore | None = None
+        self._slots: asyncio.Semaphore | None = None
 
     @property
     def capacity(self) -> int:
         self._require_open()
         return self._capacity
 
-    def _require_open(self) -> anyio.Semaphore:
+    def _require_open(self) -> asyncio.Semaphore:
         if self._slots is None:
             raise RuntimeError("the pool is not open: use it in an `async with` block")
         return self._slots
@@ -96,7 +95,8 @@ class BrowserPool:
         else:
             total = self._concurrency
         self._capacity = max(1, total)
-        self._slots = anyio.Semaphore(self._capacity)
+        self._slots = asyncio.Semaphore(self._capacity)
+        self._changed = asyncio.Event()
         self._plan_full = False
         self._plan_full_error = None
         self._owned = 0
@@ -111,9 +111,9 @@ class BrowserPool:
         self._slots = None
         idle, self._idle = self._idle, []
         self._owned -= len(idle)
-        async with anyio.create_task_group() as tg:
+        async with asyncio.TaskGroup() as tg:
             for browser in idle:
-                tg.start_soon(self._teardown, browser)
+                tg.create_task(self._teardown(browser))
 
     @asynccontextmanager
     async def lease(self) -> AsyncIterator[Browser]:
@@ -124,77 +124,63 @@ class BrowserPool:
             try:
                 yield browser
             finally:
-                await self._release(browser)
+                await finish(self._release(browser))
 
     async def _acquire(self) -> Browser:
         while True:
-            async with self._cond:
-                dead = [b for b in self._idle if b.should_recycle]
-                if dead:
-                    self._idle = [b for b in self._idle if not b.should_recycle]
-                    self._owned -= len(dead)
-                    self._plan_full = False
-                    self._cond.notify_all()
-                elif self._idle:
-                    return self._idle.pop()
-                elif self._plan_full:
-                    if self._owned == 0:
-                        error = self._plan_full_error or RateLimitError(
-                            "parallel browser limit reached", status_code=429
-                        )
-                        raise copy.copy(error)
-                    await self._cond.wait()  # 1 refusal is enough, do not retry
-                    continue
-                else:
-                    self._owned += (
-                        1  # before the await: a start in flight is capacity too
-                    )
+            dead = [b for b in self._idle if b.should_recycle]
             if dead:
-                async with anyio.create_task_group() as tg:
+                self._idle = [b for b in self._idle if not b.should_recycle]
+                self._owned -= len(dead)
+                self._plan_full = False
+                self._changed.set()
+                async with asyncio.TaskGroup() as tg:
                     for browser in dead:
-                        tg.start_soon(self._teardown, browser)
+                        tg.create_task(self._teardown(browser))
                 continue
+            if self._idle:
+                return self._idle.pop()
+            if self._plan_full:
+                if self._owned == 0:
+                    error = self._plan_full_error or RateLimitError(
+                        "parallel browser limit reached", status_code=429
+                    )
+                    raise copy.copy(error)
+                self._changed.clear()
+                await self._changed.wait()
+                continue
+            self._owned += 1
             try:
                 browser = await self._start_browser()
             except BaseException as exc:
                 full = isinstance(exc, Exception) and plan_is_full(exc)
-                with anyio.CancelScope(shield=True):
-                    async with self._cond:
-                        self._owned -= 1
-                        if full:
-                            self._plan_full = True
-                            self._plan_full_error = exc
-                        nothing_left = self._owned == 0
-                        self._cond.notify_all()
-                if not full or nothing_left:
+                self._owned -= 1
+                if full:
+                    self._plan_full = True
+                    self._plan_full_error = exc
+                self._changed.set()
+                if not full or self._owned == 0:
                     raise
                 logger.info("plan is full, waiting for a browser of ours")
                 continue
-            with anyio.CancelScope(shield=True):
-                async with self._cond:
-                    self._plan_full = False
+            self._plan_full = False
             return browser
 
     async def _release(self, browser: Browser) -> None:
         if not browser.should_recycle:
-            with anyio.CancelScope(shield=True):
-                try:
-                    with anyio.fail_after(5):
-                        await browser._end_lease()
-                except Exception as exc:
-                    logger.warning(f"could not clean up {browser.internal_uuid}: {exc}")
-                    browser.retire()
-        recycle = browser.should_recycle
-        if recycle:
+            try:
+                async with asyncio.timeout(5):
+                    await browser._end_lease()
+            except Exception as exc:
+                logger.warning(f"could not clean up {browser.internal_uuid}: {exc}")
+                browser.retire()
+        if browser.should_recycle or self._slots is None:
             await self._teardown(browser)
-        with anyio.CancelScope(shield=True):
-            async with self._cond:
-                if recycle:
-                    self._owned -= 1
-                    self._plan_full = False
-                else:
-                    self._idle.append(browser)
-                self._cond.notify_all()
+            self._owned -= 1
+            self._plan_full = False
+        else:
+            self._idle.append(browser)
+        self._changed.set()
 
     async def map[Item, Res](
         self, handler: PoolHandler[Item, Res], items: Iterable[Item]
@@ -220,9 +206,9 @@ class BrowserPool:
                 else:
                     outcomes.append(PoolOutcome(item, index, value=value))
 
-        async with anyio.create_task_group() as tg:
+        async with asyncio.TaskGroup() as tg:
             for _ in range(self.capacity):
-                tg.start_soon(worker)
+                tg.create_task(worker())
         return sorted(outcomes, key=lambda outcome: outcome.index)
 
     async def _start_browser(self) -> Browser:
@@ -241,6 +227,8 @@ class BrowserPool:
         return browser
 
     async def _teardown(self, browser: Browser) -> None:
-        with anyio.CancelScope(shield=True):
+        async def stop() -> None:
             await browser.close()
             await stop_session(self._client, browser.internal_uuid)
+
+        await finish(stop())

@@ -1,10 +1,9 @@
 import asyncio
 import base64
 
-import anyio
 import pytest
 
-from conftest import PostsViaSend
+from conftest import PostsViaSend, StoppingClient, both_ways, cancelled_after
 from surfsky.browser import CapturedResponse
 from surfsky.browser import browser as mod
 from surfsky.browser import page as page_mod
@@ -45,7 +44,6 @@ def _goto_browser(navigate_result: dict, before_return=None) -> Browser:
     return browser
 
 
-@pytest.mark.anyio
 async def test_goto_ignores_stale_lifecycle_event():
     def fire_stale():
         browser._on_lifecycle({"name": "load", "frameId": "F", "loaderId": "OLD"})
@@ -64,7 +62,6 @@ async def test_goto_ignores_stale_lifecycle_event():
     await task
 
 
-@pytest.mark.anyio
 async def test_goto_accepts_event_seen_before_navigate_returns():
     def fire_new_early():
         browser._on_lifecycle({"name": "load", "frameId": "F", "loaderId": "NEW"})
@@ -73,7 +70,6 @@ async def test_goto_accepts_event_seen_before_navigate_returns():
     await browser.goto("https://x", wait_until="load", timeout=1)
 
 
-@pytest.mark.anyio
 async def test_goto_follows_a_navigation_that_replaced_the_document():
     # a head script redirect: document A never reaches load, B does
     browser = _goto_browser({"loaderId": "A"})
@@ -89,7 +85,6 @@ async def test_goto_follows_a_navigation_that_replaced_the_document():
     await task
 
 
-@pytest.mark.anyio
 async def test_goto_follows_a_replacement_seen_before_navigate_returns():
     def replace_early():
         browser._on_lifecycle({"name": "init", "frameId": "F", "loaderId": "A"})
@@ -100,7 +95,6 @@ async def test_goto_follows_a_replacement_seen_before_navigate_returns():
     await browser.goto("https://x", wait_until="load", timeout=1)
 
 
-@pytest.mark.anyio
 async def test_goto_fails_fast_when_the_connection_drops():
     browser = _goto_browser({"loaderId": "NEW"})
 
@@ -114,21 +108,18 @@ async def test_goto_fails_fast_when_the_connection_drops():
     await task
 
 
-@pytest.mark.anyio
 async def test_goto_same_document_navigation_returns_immediately():
     # fragment navigations return no loaderId and emit no lifecycle events
     browser = _goto_browser({})
     await browser.goto("https://x#anchor", wait_until="networkidle", timeout=1)
 
 
-@pytest.mark.anyio
 async def test_goto_timeout_covers_the_wait():
     browser = _goto_browser({"loaderId": "NEW"})
     with pytest.raises(TimeoutError, match="did not reach 'load'"):
         await browser.goto("https://x", wait_until="load", timeout=0.05)
 
 
-@pytest.mark.anyio
 async def test_goto_rejects_concurrent_navigation():
     browser = _goto_browser({"loaderId": "NEW"})
     first = asyncio.create_task(browser.goto("https://a", wait_until="load", timeout=1))
@@ -139,7 +130,6 @@ async def test_goto_rejects_concurrent_navigation():
     await first
 
 
-@pytest.mark.anyio
 async def test_goto_navigation_error_is_a_cdp_error():
     browser = _goto_browser({"errorText": "net::ERR_NAME_NOT_RESOLVED"})
     with pytest.raises(CDPError, match="ERR_NAME_NOT_RESOLVED"):
@@ -182,13 +172,11 @@ class RecordingCDP:
         return [params for m, params in self.calls if m == method]
 
 
-@pytest.mark.anyio
 async def test_send_before_connect_is_a_clear_error():
     with pytest.raises(RuntimeError, match="not connected"):
         await make_browser().click("#x")
 
 
-@pytest.mark.anyio
 async def test_screenshot_passes_quality_for_webp():
     browser = make_browser()
     browser._client = RecordingCDP({  # type: ignore[assignment]
@@ -200,7 +188,6 @@ async def test_screenshot_passes_quality_for_webp():
     assert params["quality"] == 30
 
 
-@pytest.mark.anyio
 async def test_content_serializes_the_dom_without_running_script():
     browser = make_browser()
     browser._client = RecordingCDP({  # type: ignore[assignment]
@@ -211,7 +198,6 @@ async def test_content_serializes_the_dom_without_running_script():
     assert "Runtime.evaluate" not in [m for m, _ in browser._client.calls]
 
 
-@pytest.mark.anyio
 async def test_title_reads_the_target_without_running_script():
     browser = make_browser()
     browser._target_id = "T"
@@ -222,7 +208,6 @@ async def test_title_reads_the_target_without_running_script():
     assert [m for m, _ in browser._client.calls] == ["Target.getTargetInfo"]
 
 
-@pytest.mark.anyio
 async def test_url_reads_the_target_without_running_script():
     browser = make_browser()
     browser._target_id = "T"
@@ -233,7 +218,6 @@ async def test_url_reads_the_target_without_running_script():
     assert [m for m, _ in browser._client.calls] == ["Target.getTargetInfo"]
 
 
-@pytest.mark.anyio
 async def test_cookies_parse_into_the_import_format():
     browser = make_browser()
     browser._client = RecordingCDP(  # type: ignore[assignment]
@@ -260,14 +244,12 @@ async def test_cookies_parse_into_the_import_format():
     assert cookies[0].model_dump(by_alias=True)["expirationDate"] == 1800000000
 
 
-@pytest.mark.anyio
 async def test_cookies_on_a_page_without_any():
     browser = make_browser()
     browser._client = RecordingCDP({"Network.getCookies": {}})  # type: ignore[assignment]
     assert await browser.cookies() == []
 
 
-@pytest.mark.anyio
 async def test_a_failed_command_names_itself():
     class FailingCDP:
         async def send(self, method, params=None, session_id=None):
@@ -279,7 +261,6 @@ async def test_a_failed_command_names_itself():
         await browser.click("#nope")
 
 
-@pytest.mark.anyio
 async def test_a_stale_node_is_reported_as_the_navigation_race_it_is():
     class RacingCDP:
         async def send(self, method, params=None, session_id=None):
@@ -302,7 +283,6 @@ async def test_a_stale_node_is_reported_as_the_navigation_race_it_is():
 DOCUMENT = {"root": {"nodeId": 1}}
 
 
-@pytest.mark.anyio
 async def test_wait_for_returns_once_the_element_has_a_box():
     browser = make_browser()
     browser._client = RecordingCDP(  # type: ignore[assignment]
@@ -316,7 +296,6 @@ async def test_wait_for_returns_once_the_element_has_a_box():
     assert "Runtime.evaluate" not in [m for m, _ in browser._client.calls]
 
 
-@pytest.mark.anyio
 async def test_wait_for_ignores_a_box_of_no_size():
     browser = make_browser()
     browser._client = RecordingCDP(  # type: ignore[assignment]
@@ -330,7 +309,6 @@ async def test_wait_for_ignores_a_box_of_no_size():
         await browser.wait_for_selector("#collapsed", timeout=0.2)
 
 
-@pytest.mark.anyio
 async def test_wait_for_attached_skips_the_box_lookup():
     browser = make_browser()
     browser._client = RecordingCDP(  # type: ignore[assignment]
@@ -340,7 +318,6 @@ async def test_wait_for_attached_skips_the_box_lookup():
     assert "DOM.getBoxModel" not in [m for m, _ in browser._client.calls]
 
 
-@pytest.mark.anyio
 async def test_wait_for_polls_through_a_document_replaced_under_it():
     class RacingCDP(RecordingCDP):
         def __init__(self, results, swaps):
@@ -368,7 +345,6 @@ async def test_wait_for_polls_through_a_document_replaced_under_it():
     assert len(queries) == 3
 
 
-@pytest.mark.anyio
 async def test_wait_for_names_what_never_showed_up():
     browser = make_browser()
     browser._client = RecordingCDP(  # type: ignore[assignment]
@@ -378,7 +354,6 @@ async def test_wait_for_names_what_never_showed_up():
         await browser.wait_for_selector("#nope", timeout=0.2)
 
 
-@pytest.mark.anyio
 async def test_is_visible_answers_without_waiting():
     browser = make_browser()
     browser._client = RecordingCDP(  # type: ignore[assignment]
@@ -387,7 +362,6 @@ async def test_is_visible_answers_without_waiting():
     assert await browser.is_visible("#nope") is False
 
 
-@pytest.mark.anyio
 async def test_html_returns_one_element_and_none_for_a_miss():
     browser = make_browser()
     browser._client = RecordingCDP(  # type: ignore[assignment]
@@ -405,7 +379,6 @@ async def test_html_returns_one_element_and_none_for_a_miss():
     assert await browser.outer_html("h1") is None
 
 
-@pytest.mark.anyio
 async def test_an_xpath_goes_through_the_search_domain_not_query_selector():
     browser = make_browser()
     browser._client = SearchingCDP(  # type: ignore[assignment]
@@ -434,7 +407,6 @@ async def test_an_xpath_goes_through_the_search_domain_not_query_selector():
     )
 
 
-@pytest.mark.anyio
 async def test_an_xpath_with_no_match_is_a_miss():
     browser = make_browser()
     browser._client = RecordingCDP(  # type: ignore[assignment]
@@ -448,7 +420,6 @@ async def test_an_xpath_with_no_match_is_a_miss():
     assert "DOM.getSearchResults" not in [m for m, _ in browser._client.calls]
 
 
-@pytest.mark.anyio
 async def test_set_cookies_speaks_cdp_whatever_it_is_given():
     browser = make_browser()
     browser._client = RecordingCDP({"Network.setCookies": {}})  # type: ignore[assignment]
@@ -489,7 +460,6 @@ async def test_set_cookies_speaks_cdp_whatever_it_is_given():
     assert sent[2] == {"name": "plain", "value": "3", "domain": "example.com"}
 
 
-@pytest.mark.anyio
 async def test_wait_for_url_polls_until_the_navigation_lands():
     class MovingCDP(RecordingCDP):
         def __init__(self):
@@ -507,7 +477,6 @@ async def test_wait_for_url_polls_until_the_navigation_lands():
     assert await browser.wait_for_url("/done", timeout=5) == "https://a.test/done"
 
 
-@pytest.mark.anyio
 async def test_wait_for_url_names_where_it_never_got():
     browser = make_browser()
     browser._client = RecordingCDP(  # type: ignore[assignment]
@@ -517,7 +486,6 @@ async def test_wait_for_url_names_where_it_never_got():
         await browser.wait_for_url("/secure", timeout=0.2)
 
 
-@pytest.mark.anyio
 async def test_an_element_screenshot_clips_to_its_box_in_page_coordinates():
     # the box is viewport-relative and the clip page-relative: an element that
     # had to be scrolled into view came back blank without the offset
@@ -537,7 +505,6 @@ async def test_an_element_screenshot_clips_to_its_box_in_page_coordinates():
     assert params["clip"] == {"x": 10, "y": 3020, "width": 80, "height": 40, "scale": 1}
 
 
-@pytest.mark.anyio
 async def test_type_and_fill_check_that_the_click_took_focus():
     browser = make_browser()
     focused = {"result": {"type": "boolean", "value": True}}
@@ -566,7 +533,6 @@ async def test_type_and_fill_check_that_the_click_took_focus():
     assert browser._client.calls[-1][0] == "Runtime.callFunctionOn"
 
 
-@pytest.mark.anyio
 async def test_reload_uses_page_reload_and_waits_for_the_new_document():
     # not a navigation to the same URL: with a fragment that is a same-document no-op
     class ReloadingCDP(RecordingCDP):
@@ -584,7 +550,6 @@ async def test_reload_uses_page_reload_and_waits_for_the_new_document():
     assert browser._client.sent("Page.navigate") == []
 
 
-@pytest.mark.anyio
 async def test_reload_waits_for_a_document_that_inits_after_the_reply():
     browser = _goto_browser({})
     browser._client = RecordingCDP({"Page.reload": {}})  # type: ignore[assignment]
@@ -599,7 +564,6 @@ async def test_reload_waits_for_a_document_that_inits_after_the_reply():
     await task
 
 
-@pytest.mark.anyio
 async def test_a_commands_own_timeout_keeps_its_message_inside_a_longer_wait():
     # BrowserTimeoutError is a TimeoutError: the navigation's deadline must not
     # relabel the command's, which fired first
@@ -613,7 +577,6 @@ async def test_a_commands_own_timeout_keeps_its_message_inside_a_longer_wait():
         await browser.goto("https://x", timeout=5)
 
 
-@pytest.mark.anyio
 async def test_evaluate_does_not_call_a_function_it_was_only_asked_to_read():
     browser = make_browser()
     browser._client = RecordingCDP(  # type: ignore[assignment]
@@ -642,7 +605,6 @@ class HistoryCDP(RecordingCDP):
         return {}
 
 
-@pytest.mark.anyio
 async def test_back_and_forward_walk_the_history():
     browser = make_browser()
     browser._client = HistoryCDP(["https://a.test/", "https://a.test/?p=2"], index=1)  # type: ignore[assignment]
@@ -651,7 +613,6 @@ async def test_back_and_forward_walk_the_history():
     assert await browser.go_forward() == "https://a.test/?p=2"
 
 
-@pytest.mark.anyio
 async def test_history_ends_are_none_not_errors():
     browser = make_browser()
     browser._client = HistoryCDP(["https://a.test/"], index=0)  # type: ignore[assignment]
@@ -660,7 +621,6 @@ async def test_history_ends_are_none_not_errors():
     assert "Page.navigateToHistoryEntry" not in [m for m, _ in browser._client.calls]
 
 
-@pytest.mark.anyio
 async def test_local_storage_reads_and_writes_the_frame_origin():
     browser = make_browser()
     browser._client = RecordingCDP(  # type: ignore[assignment]
@@ -678,7 +638,6 @@ async def test_local_storage_reads_and_writes_the_frame_origin():
     assert [m for m, _ in browser._client.calls].count("DOMStorage.enable") == 1
 
 
-@pytest.mark.anyio
 async def test_capture_responses_needs_a_fragment(fake_cdp):
     browser = make_browser()
     await browser.connect()
@@ -690,14 +649,12 @@ async def test_capture_responses_needs_a_fragment(fake_cdp):
     assert fake_cdp.calls.count("Network.enable") == 1
 
 
-@pytest.mark.anyio
 async def test_wait_for_response_says_when_nothing_was_armed():
     browser = make_browser()
     with pytest.raises(RuntimeError, match="capture_responses"):
         await browser.wait_for_response("/api/")
 
 
-@pytest.mark.anyio
 async def test_a_captured_response_carries_its_body(monkeypatch):
     class BodyCDP(FakeConnectCDP):
         async def send(self, method, params=None, session_id=None):
@@ -736,7 +693,6 @@ async def test_a_captured_response_carries_its_body(monkeypatch):
     assert [r.url for r in browser.responses] == ["https://a.test/api/search"]
 
 
-@pytest.mark.anyio
 async def test_a_body_still_being_fetched_at_stop_capturing_is_dropped(monkeypatch):
     # the lease ended while the body was in flight: it must not surface in the next one
     release = asyncio.Event()
@@ -763,7 +719,6 @@ async def test_a_body_still_being_fetched_at_stop_capturing_is_dropped(monkeypat
         assert browser.responses == []
 
 
-@pytest.mark.anyio
 async def test_send_applies_the_command_timeout():
     class WedgedCDP:
         async def send(self, method, params=None, session_id=None):
@@ -775,26 +730,44 @@ async def test_send_applies_the_command_timeout():
         await browser.send("Human.click", {})
 
 
-@pytest.mark.anyio
 async def test_stop_session_survives_cancellation():
-    # unshielded awaits die inside a cancelled scope; the stop must still run
-    stopped: list[str] = []
+    client = StoppingClient(0.01)
 
-    class FakeProfiles:
-        async def stop(self, uuid: str) -> None:
-            await anyio.sleep(0.01)  # a checkpoint, like a real HTTP call
-            stopped.append(uuid)
+    async def work() -> None:
+        try:
+            await asyncio.sleep(5)
+        finally:
+            await stop_session(client, "sess-1")  # type: ignore[arg-type]
 
-    class FakeClient:
-        profiles = FakeProfiles()
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.01):
+            await work()
+    assert client.stopped == ["sess-1"]
 
-        def with_options(self, **kwargs):
-            return self
 
-    with anyio.CancelScope() as scope:
-        scope.cancel()
-        await stop_session(FakeClient(), "sess-1")  # type: ignore[arg-type]
-    assert stopped == ["sess-1"]
+@both_ways
+async def test_stop_session_cancelled_halfway_still_stops(the_anyio_way):
+    client = StoppingClient(0.05)
+    async with cancelled_after(0.01, the_anyio_way):
+        await stop_session(client, "sess-1")  # type: ignore[arg-type]
+    assert client.stopped == ["sess-1"]
+
+
+async def test_a_deadline_does_not_wait_for_the_search_cleanup():
+    class Wedged(RecordingCDP):
+        async def send(self, method, params=None, session_id=None):
+            if method in ("DOM.getSearchResults", "DOM.discardSearchResults"):
+                await asyncio.sleep(10)
+            return await super().send(method, params, session_id)
+
+    browser = make_browser(command_timeout=5)
+    browser._client = Wedged(  # type: ignore[assignment]
+        {"DOM.performSearch": {"searchId": "s", "resultCount": 1}}
+    )
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(BrowserTimeoutError, match="was not visible within 0.05s"):
+        await browser.wait_for_selector("//h1", timeout=0.05)
+    assert asyncio.get_running_loop().time() - started < 1
 
 
 class FakeConnectCDP(PostsViaSend):
@@ -840,7 +813,6 @@ def fake_cdp(monkeypatch) -> FakeConnectCDP:
     return fake
 
 
-@pytest.mark.anyio
 async def test_connect_enables_fetch_with_resource_type_patterns(fake_cdp):
     browser = make_browser(block_resources=HEAVY)
     await browser.connect()
@@ -854,7 +826,6 @@ async def test_connect_enables_fetch_with_resource_type_patterns(fake_cdp):
     }
 
 
-@pytest.mark.anyio
 async def test_a_page_with_nothing_to_block_arms_network_and_not_fetch(fake_cdp):
     browser = make_browser()
     await browser.connect()
@@ -862,7 +833,6 @@ async def test_a_page_with_nothing_to_block_arms_network_and_not_fetch(fake_cdp)
     assert "Fetch.enable" not in fake_cdp.calls
 
 
-@pytest.mark.anyio
 async def test_the_document_response_reports_its_status(fake_cdp):
     browser = make_browser(block_resources={"image"})
     await browser.connect()
@@ -876,7 +846,6 @@ async def test_the_document_response_reports_its_status(fake_cdp):
     assert "Fetch.failRequest" in fake_cdp.calls
 
 
-@pytest.mark.anyio
 async def test_an_iframe_document_does_not_set_the_page_status(fake_cdp):
     async with make_browser() as browser:
         fake_cdp.document_response("S", "R1", 200)
@@ -884,7 +853,6 @@ async def test_an_iframe_document_does_not_set_the_page_status(fake_cdp):
         assert browser.status == 200
 
 
-@pytest.mark.anyio
 async def test_a_subresource_does_not_set_the_page_status(fake_cdp):
     async with make_browser() as browser:
         fake_cdp.handlers["Network.responseReceived"](
@@ -903,7 +871,6 @@ class ReplayingCDP(FakeConnectCDP):
         return await super().send(method, params, session_id)
 
 
-@pytest.mark.anyio
 async def test_wait_for_load_before_any_goto_sees_the_replayed_state(monkeypatch):
     fake = ReplayingCDP()
     monkeypatch.setattr(mod, "CDPClient", lambda ws, **kw: fake)
@@ -911,7 +878,6 @@ async def test_wait_for_load_before_any_goto_sees_the_replayed_state(monkeypatch
         await browser.wait_for_load_state(timeout=0.2)
 
 
-@pytest.mark.anyio
 async def test_connect_timeout(monkeypatch):
     fake = FakeConnectCDP(start_delay=10)
     monkeypatch.setattr(mod, "CDPClient", lambda ws, **kw: fake)
@@ -928,7 +894,6 @@ class FailingFetchCDP(FakeConnectCDP):
         return await super().send(method, params, session_id)
 
 
-@pytest.mark.anyio
 async def test_connect_raises_a_failed_setup_command(monkeypatch):
     fake = FailingFetchCDP()
     monkeypatch.setattr(mod, "CDPClient", lambda ws, **kw: fake)
@@ -938,7 +903,6 @@ async def test_connect_raises_a_failed_setup_command(monkeypatch):
     assert not fake.connected
 
 
-@pytest.mark.anyio
 async def test_async_context_manager_connects_and_closes(fake_cdp):
     async with make_browser() as browser:
         assert browser._client is fake_cdp
@@ -953,7 +917,6 @@ def test_public_exports_resolve():
         assert hasattr(surfsky, name), name
 
 
-@pytest.mark.anyio
 async def test_connect_twice_raises(fake_cdp):
     async with make_browser() as browser:
         with pytest.raises(RuntimeError, match="already connected"):
@@ -966,7 +929,6 @@ def test_disconnected_browser_should_recycle():
     assert browser.should_recycle  # the pool must not retry items on a dead socket
 
 
-@pytest.mark.anyio
 async def test_start_session_stops_after_close(fake_cdp):
     from contextlib import asynccontextmanager
 
@@ -990,7 +952,6 @@ async def test_start_session_stops_after_close(fake_cdp):
     assert not fake_cdp.connected
 
 
-@pytest.mark.anyio
 async def test_a_crashed_renderer_marks_the_browser_for_recycling(fake_cdp):
     async with make_browser() as browser:
         # Inspector.targetCrashed comes on the page's session; Target.targetCrashed
@@ -1009,7 +970,6 @@ class WedgedSendCDP(FakeConnectCDP):
         return await super().send(method, params, session_id)
 
 
-@pytest.mark.anyio
 async def test_blocking_a_request_does_not_park_a_task_forever(monkeypatch):
     fake = WedgedSendCDP()
     monkeypatch.setattr(mod, "CDPClient", lambda ws, **kw: fake)
@@ -1019,14 +979,13 @@ async def test_blocking_a_request_does_not_park_a_task_forever(monkeypatch):
         before = set(browser._pending)  # the keepalive is in here and never ends
         browser._on_request_paused({"requestId": "r1"})
         blocked = (set(browser._pending) - before).pop()
-        with anyio.fail_after(2):
+        async with asyncio.timeout(2):
             while not blocked.done():
-                await anyio.sleep(0.01)  # command_timeout reaps it
+                await asyncio.sleep(0.01)  # command_timeout reaps it
     finally:
         await browser.close()
 
 
-@pytest.mark.anyio
 async def test_close_does_not_abandon_spawned_tasks(monkeypatch):
     fake = WedgedSendCDP()
     monkeypatch.setattr(mod, "CDPClient", lambda ws, **kw: fake)
@@ -1045,7 +1004,6 @@ def test_browser_errors_are_surfsky_errors():
     assert issubclass(BrowserTimeoutError, TimeoutError)  # and the old catch still works
 
 
-@pytest.mark.anyio
 async def test_evaluate_calls_a_function_with_json_safe_arguments():
     browser = make_browser()
     browser._client = RecordingCDP({"Runtime.evaluate": {"result": {"value": 3}}})  # type: ignore[assignment]
@@ -1055,7 +1013,6 @@ async def test_evaluate_calls_a_function_with_json_safe_arguments():
     assert params["awaitPromise"] is True
 
 
-@pytest.mark.anyio
 async def test_evaluate_calls_a_bare_function_and_leaves_an_expression_alone():
     browser = make_browser()
     browser._client = RecordingCDP({"Runtime.evaluate": {"result": {"value": None}}})  # type: ignore[assignment]
@@ -1076,7 +1033,6 @@ async def test_evaluate_calls_a_bare_function_and_leaves_an_expression_alone():
     ]
 
 
-@pytest.mark.anyio
 async def test_evaluate_calls_a_function_the_regex_did_not_spot():
     class FunctionCDP(RecordingCDP):
         async def send(self, method, params=None, session_id=None):
@@ -1096,7 +1052,6 @@ async def test_evaluate_calls_a_function_the_regex_did_not_spot():
     ]
 
 
-@pytest.mark.anyio
 async def test_all_inner_texts_read_through_one_evaluate():
     browser = make_browser()
     browser._client = RecordingCDP({"Runtime.evaluate": {"result": {"value": ["a", "b"]}}})  # type: ignore[assignment]
@@ -1105,7 +1060,6 @@ async def test_all_inner_texts_read_through_one_evaluate():
     assert '"li"' in params["expression"] and "innerText" in params["expression"]
 
 
-@pytest.mark.anyio
 async def test_text_reads_the_node_the_lookup_found():
     browser = make_browser()
     browser._client = RecordingCDP({  # type: ignore[assignment]
@@ -1127,7 +1081,6 @@ async def test_text_reads_the_node_the_lookup_found():
     )
 
 
-@pytest.mark.anyio
 async def test_text_is_none_for_a_miss():
     browser = make_browser()
     browser._client = RecordingCDP({"DOM.querySelector": {}})  # type: ignore[assignment]
@@ -1164,7 +1117,6 @@ class SearchingCDP(RecordingCDP):
         return await super().send(method, params, session_id)
 
 
-@pytest.mark.anyio
 async def test_a_light_dom_miss_falls_back_into_the_shadow_roots():
     browser = make_browser()
     browser._client = SearchingCDP()  # type: ignore[assignment]
@@ -1186,7 +1138,6 @@ async def test_a_light_dom_miss_falls_back_into_the_shadow_roots():
     assert len(browser._client.sent("Page.createIsolatedWorld")) == 1
 
 
-@pytest.mark.anyio
 async def test_a_miss_that_stays_a_miss_still_discards_the_search():
     browser = make_browser()
     browser._client = SearchingCDP(keep=0)
@@ -1195,7 +1146,6 @@ async def test_a_miss_that_stays_a_miss_still_discards_the_search():
     assert browser._client.sent("DOM.discardSearchResults") == [{"searchId": "s"}] * 2
 
 
-@pytest.mark.anyio
 async def test_a_candidate_that_went_away_is_no_match_not_a_failure():
     class Vanishing(SearchingCDP):
         async def send(self, method, params=None, session_id=None):
@@ -1208,7 +1158,6 @@ async def test_a_candidate_that_went_away_is_no_match_not_a_failure():
     assert await browser.outer_html("#login") == "<div id=login></div>"
 
 
-@pytest.mark.anyio
 async def test_a_check_that_fails_for_real_reaches_the_caller_unwrapped():
     class Closing(SearchingCDP):
         async def send(self, method, params=None, session_id=None):
@@ -1222,7 +1171,6 @@ async def test_a_check_that_fails_for_real_reaches_the_caller_unwrapped():
         await browser.outer_html("#login")
 
 
-@pytest.mark.anyio
 async def test_count_pierces_only_after_a_light_dom_miss():
     browser = make_browser()
     browser._client = RecordingCDP({"DOM.querySelectorAll": {"nodeIds": [1, 2]}})  # type: ignore[assignment]
@@ -1233,7 +1181,6 @@ async def test_count_pierces_only_after_a_light_dom_miss():
     assert await browser.count("#login") == 1
 
 
-@pytest.mark.anyio
 async def test_bounding_box_is_the_content_box_not_the_border_box():
     browser = make_browser()
     browser._client = SearchingCDP()  # type: ignore[assignment]
@@ -1247,7 +1194,6 @@ async def test_bounding_box_is_the_content_box_not_the_border_box():
     assert await browser.bounding_box("#login") is None
 
 
-@pytest.mark.anyio
 async def test_a_node_scoped_call_remakes_the_world_after_it_is_gone():
     class Gone(RecordingCDP):
         worlds = 0
@@ -1285,7 +1231,6 @@ async def test_a_node_scoped_call_remakes_the_world_after_it_is_gone():
         await browser.inner_text("h1")
 
 
-@pytest.mark.anyio
 async def test_text_takes_an_xpath_selector():
     browser = make_browser()
     browser._client = RecordingCDP({  # type: ignore[assignment]
@@ -1301,7 +1246,6 @@ async def test_text_takes_an_xpath_selector():
     ]
 
 
-@pytest.mark.anyio
 async def test_attribute_reads_the_node_without_running_script():
     browser = make_browser()
     browser._client = RecordingCDP({  # type: ignore[assignment]
@@ -1314,7 +1258,6 @@ async def test_attribute_reads_the_node_without_running_script():
     assert "Runtime.evaluate" not in [m for m, _ in browser._client.calls]
 
 
-@pytest.mark.anyio
 async def test_attribute_is_none_for_a_miss():
     browser = make_browser()
     browser._client = RecordingCDP({  # type: ignore[assignment]
@@ -1324,7 +1267,6 @@ async def test_attribute_is_none_for_a_miss():
     assert await browser.get_attribute("a", "href") is None
 
 
-@pytest.mark.anyio
 async def test_count_counts_matches_without_running_script():
     browser = make_browser()
     browser._client = RecordingCDP({  # type: ignore[assignment]
@@ -1334,7 +1276,6 @@ async def test_count_counts_matches_without_running_script():
     assert await browser.count("li") == 3
 
 
-@pytest.mark.anyio
 async def test_select_sets_the_option_and_fires_change():
     browser = make_browser()
     browser._client = RecordingCDP({  # type: ignore[assignment]
@@ -1346,7 +1287,6 @@ async def test_select_sets_the_option_and_fires_change():
     assert params["arguments"] == [{"value": "eu"}, {"value": None}]
 
 
-@pytest.mark.anyio
 async def test_select_takes_an_xpath_selector():
     browser = make_browser()
     browser._client = RecordingCDP({  # type: ignore[assignment]
@@ -1361,7 +1301,6 @@ async def test_select_takes_an_xpath_selector():
     }
 
 
-@pytest.mark.anyio
 async def test_select_by_label_and_a_missing_option_complain():
     browser = make_browser()
     browser._client = RecordingCDP({  # type: ignore[assignment]
@@ -1376,7 +1315,6 @@ async def test_select_by_label_and_a_missing_option_complain():
         await browser.select_option("#region", "eu")
 
 
-@pytest.mark.anyio
 async def test_wait_for_function_polls_until_truthy_and_returns_the_value():
     class Later(RecordingCDP):
         polls = 0
@@ -1393,7 +1331,6 @@ async def test_wait_for_function_polls_until_truthy_and_returns_the_value():
     assert browser._client.polls == 3
 
 
-@pytest.mark.anyio
 async def test_wait_for_function_names_what_stayed_false():
     browser = make_browser()
     browser._client = RecordingCDP({"Runtime.evaluate": {"result": {"value": 0}}})  # type: ignore[assignment]
@@ -1401,7 +1338,6 @@ async def test_wait_for_function_names_what_stayed_false():
         await browser.wait_for_function("window.ready", timeout=0.05)
 
 
-@pytest.mark.anyio
 async def test_session_storage_uses_the_session_bucket():
     browser = make_browser()
     browser._client = RecordingCDP(  # type: ignore[assignment]
@@ -1418,7 +1354,6 @@ async def test_session_storage_uses_the_session_bucket():
     assert written["storageId"] == {"isLocalStorage": False, "storageKey": "K"}
 
 
-@pytest.mark.anyio
 async def test_clear_cookies_clears_the_browser():
     browser = make_browser()
     browser._client = RecordingCDP({"Network.clearBrowserCookies": {}})  # type: ignore[assignment]
@@ -1426,7 +1361,6 @@ async def test_clear_cookies_clears_the_browser():
     assert [m for m, _ in browser._client.calls] == ["Network.clearBrowserCookies"]
 
 
-@pytest.mark.anyio
 async def test_stop_capturing_forgets_the_fragments_and_the_answers(fake_cdp):
     browser = make_browser()
     await browser.connect()
@@ -1439,7 +1373,6 @@ async def test_stop_capturing_forgets_the_fragments_and_the_answers(fake_cdp):
         await browser.wait_for_response("/api/")
 
 
-@pytest.mark.anyio
 async def test_connect_blocks_url_patterns_too(fake_cdp):
     browser = make_browser(block_resources={"image"}, block_urls=["*analytics*", "*.woff2"])
     await browser.connect()
@@ -1452,7 +1385,6 @@ async def test_connect_blocks_url_patterns_too(fake_cdp):
     }
 
 
-@pytest.mark.anyio
 async def test_evaluate_runs_in_an_isolated_world_the_page_cannot_see():
     browser = make_browser()
     browser._frame_id = "F"
@@ -1463,7 +1395,6 @@ async def test_evaluate_runs_in_an_isolated_world_the_page_cannot_see():
     assert [p["contextId"] for p in browser._client.sent("Runtime.evaluate")] == [7, 7]
 
 
-@pytest.mark.anyio
 async def test_evaluate_in_the_main_world_only_on_request():
     browser = make_browser()
     browser._client = RecordingCDP({"Runtime.evaluate": {"result": {"value": 1}}})  # type: ignore[assignment]
@@ -1473,7 +1404,6 @@ async def test_evaluate_in_the_main_world_only_on_request():
     assert all("contextId" not in p for p in browser._client.sent("Runtime.evaluate"))
 
 
-@pytest.mark.anyio
 async def test_the_isolated_world_is_made_again_after_a_navigation():
     class Gone(RecordingCDP):
         worlds = 0

@@ -1,5 +1,8 @@
 import asyncio
+import base64
+import hashlib
 import json
+import re
 
 import pytest
 
@@ -54,7 +57,36 @@ def _echo(msg: dict) -> dict:
     return {"id": msg["id"], "result": {"method": msg["method"]}}
 
 
-@pytest.mark.anyio
+async def test_stop_drops_the_socket_of_a_peer_that_went_silent(monkeypatch):
+    monkeypatch.setattr(cdp, "CLOSE_TIMEOUT", 0.1)
+    gone = asyncio.Event()
+
+    async def silent(reader, writer) -> None:
+        head = await reader.readuntil(b"\r\n\r\n")
+        key = re.search(rb"(?i)sec-websocket-key: (\S+)", head)[1]
+        guid = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+        accept = base64.b64encode(hashlib.sha1(key + guid).digest())
+        writer.write(
+            b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+            b"Connection: Upgrade\r\nSec-WebSocket-Accept: " + accept + b"\r\n\r\n"
+        )
+        await gone.wait()
+        writer.close()
+
+    server = await asyncio.start_server(silent, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    client = CDPClient(f"ws://127.0.0.1:{port}")
+    await client.start()
+    transport = client._ws.transport
+    try:
+        async with asyncio.timeout(2):
+            await client.stop()
+        assert transport.is_closing()
+    finally:
+        gone.set()
+        server.close()
+
+
 async def test_send_returns_matching_result(monkeypatch):
     ws = FakeWebSocket()
     ws.responder = _echo
@@ -65,7 +97,6 @@ async def test_send_returns_matching_result(monkeypatch):
         await client.stop()
 
 
-@pytest.mark.anyio
 async def test_concurrent_commands_correlate_by_id(monkeypatch):
     ws = FakeWebSocket()
     ws.responder = lambda m: {"id": m["id"], "result": {"echo": m["method"]}}
@@ -80,7 +111,6 @@ async def test_concurrent_commands_correlate_by_id(monkeypatch):
         await client.stop()
 
 
-@pytest.mark.anyio
 async def test_outgoing_frame_shape(monkeypatch):
     ws = FakeWebSocket()
     ws.responder = lambda m: {"id": m["id"], "result": {}}
@@ -96,7 +126,6 @@ async def test_outgoing_frame_shape(monkeypatch):
         await client.stop()
 
 
-@pytest.mark.anyio
 async def test_no_session_id_omits_the_key(monkeypatch):
     ws = FakeWebSocket()
     ws.responder = lambda m: {"id": m["id"], "result": {}}
@@ -108,7 +137,6 @@ async def test_no_session_id_omits_the_key(monkeypatch):
         await client.stop()
 
 
-@pytest.mark.anyio
 async def test_error_reply_raises_cdp_error(monkeypatch):
     ws = FakeWebSocket()
     ws.responder = lambda m: {"id": m["id"], "error": {"code": -32000, "message": "boom"}}
@@ -120,7 +148,6 @@ async def test_error_reply_raises_cdp_error(monkeypatch):
         await client.stop()
 
 
-@pytest.mark.anyio
 async def test_event_dispatched_to_registered_handler(monkeypatch):
     ws = FakeWebSocket()
     client = await _connected(monkeypatch, ws)
@@ -138,7 +165,6 @@ async def test_event_dispatched_to_registered_handler(monkeypatch):
         await client.stop()
 
 
-@pytest.mark.anyio
 async def test_unregistered_event_is_ignored(monkeypatch):
     ws = FakeWebSocket()
     ws.responder = _echo
@@ -151,7 +177,6 @@ async def test_unregistered_event_is_ignored(monkeypatch):
         await client.stop()
 
 
-@pytest.mark.anyio
 async def test_stop_fails_pending_commands(monkeypatch):
     ws = FakeWebSocket()
     ws.responder = lambda m: None
@@ -165,7 +190,6 @@ async def test_stop_fails_pending_commands(monkeypatch):
         await pending  # must not hang
 
 
-@pytest.mark.anyio
 async def test_cancelled_command_is_removed_from_pending(monkeypatch):
     ws = FakeWebSocket()
     ws.responder = lambda m: None
@@ -182,7 +206,6 @@ async def test_cancelled_command_is_removed_from_pending(monkeypatch):
         await client.stop()
 
 
-@pytest.mark.anyio
 async def test_an_abandoned_post_is_removed_from_pending(monkeypatch):
     ws = FakeWebSocket()
     ws.responder = lambda m: None
@@ -197,14 +220,12 @@ async def test_an_abandoned_post_is_removed_from_pending(monkeypatch):
         await client.stop()
 
 
-@pytest.mark.anyio
 async def test_send_before_start_raises():
     client = CDPClient("wss://fake")
     with pytest.raises(RuntimeError, match="not connected"):
         await client.send("Page.enable")
 
 
-@pytest.mark.anyio
 async def test_stop_is_idempotent(monkeypatch):
     ws = FakeWebSocket()
     client = await _connected(monkeypatch, ws)
@@ -213,7 +234,6 @@ async def test_stop_is_idempotent(monkeypatch):
     assert ws.closed
 
 
-@pytest.mark.anyio
 async def test_handler_exception_does_not_kill_the_connection(monkeypatch, caplog):
     ws = FakeWebSocket()
     ws.responder = _echo
@@ -228,7 +248,6 @@ async def test_handler_exception_does_not_kill_the_connection(monkeypatch, caplo
         await client.stop()
 
 
-@pytest.mark.anyio
 async def test_server_close_fails_later_commands(monkeypatch):
     ws = FakeWebSocket()
     closed: list[bool] = []
@@ -242,7 +261,6 @@ async def test_server_close_fails_later_commands(monkeypatch):
     await client.stop()
 
 
-@pytest.mark.anyio
 async def test_send_after_stop_reports_a_cdp_error(monkeypatch):
     # "the connection is gone" must be one exception type, whoever closed it
     ws = FakeWebSocket()
@@ -252,7 +270,6 @@ async def test_send_after_stop_reports_a_cdp_error(monkeypatch):
         await client.send("Page.enable")
 
 
-@pytest.mark.anyio
 async def test_a_failing_socket_send_reports_a_cdp_error(monkeypatch):
     # the socket can drop between the receive loop noticing and our send
     ws = FakeWebSocket()
@@ -268,7 +285,6 @@ async def test_a_failing_socket_send_reports_a_cdp_error(monkeypatch):
     await client.stop()
 
 
-@pytest.mark.anyio
 async def test_a_malformed_frame_does_not_kill_the_connection(monkeypatch):
     ws = FakeWebSocket()
     client = await _connected(monkeypatch, ws)
@@ -282,7 +298,6 @@ async def test_a_malformed_frame_does_not_kill_the_connection(monkeypatch):
     await client.stop()
 
 
-@pytest.mark.anyio
 async def test_error_replies_keep_the_server_detail(monkeypatch):
     ws = FakeWebSocket()
     client = await _connected(monkeypatch, ws)
@@ -295,7 +310,6 @@ async def test_error_replies_keep_the_server_detail(monkeypatch):
     await client.stop()
 
 
-@pytest.mark.anyio
 async def test_pending_commands_fail_even_if_the_close_errors(monkeypatch):
     # nothing will answer once we are stopping, whatever the socket does
     ws = FakeWebSocket()

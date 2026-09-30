@@ -1,8 +1,7 @@
+import asyncio
 import os
 
-import anyio
 import pytest
-from anyio import create_task_group
 
 from surfsky import AsyncSurfsky, Browser
 
@@ -12,13 +11,10 @@ LIVE_ENV_READY = bool(
     and os.environ.get("SURFSKY_API_BASE_URL")
 )
 
-pytestmark = [
-    pytest.mark.anyio,
-    pytest.mark.skipif(
-        not LIVE_ENV_READY,
-        reason="live tests need SURFSKY_LIVE_TESTS=1, SURFSKY_API_TOKEN and SURFSKY_API_BASE_URL",
-    ),
-]
+pytestmark = pytest.mark.skipif(
+    not LIVE_ENV_READY,
+    reason="live tests need SURFSKY_LIVE_TESTS=1, SURFSKY_API_TOKEN and SURFSKY_API_BASE_URL",
+)
 
 POOL_WORKERS = 5
 CHURN_SESSIONS = 8
@@ -34,13 +30,15 @@ async def _active_uuids(client: AsyncSurfsky) -> set[str]:
 
 async def _wait_records_drained(client: AsyncSurfsky, ours: set[str]) -> set[str]:
     leftover = ours
-    with anyio.move_on_after(RECORDS_DRAIN_DEADLINE):
-        while True:
-            leftover = await _active_uuids(client) & ours
-            if not leftover:
-                return set()
-            await anyio.sleep(5)
-    return leftover
+    try:
+        async with asyncio.timeout(RECORDS_DRAIN_DEADLINE):
+            while True:
+                leftover = await _active_uuids(client) & ours
+                if not leftover:
+                    return set()
+                await asyncio.sleep(5)
+    except TimeoutError:
+        return leftover
 
 
 async def test_concurrent_scraping_pool():
@@ -53,7 +51,7 @@ async def test_concurrent_scraping_pool():
         return {"url": url, "title": await browser.title()}
 
     async with AsyncSurfsky() as client:
-        with anyio.fail_after(TEST_DEADLINE):
+        async with asyncio.timeout(TEST_DEADLINE):
             async with client.browsers(concurrency=POOL_WORKERS) as browsers:
                 outcomes = await browsers.map(handle, URLS)
 
@@ -78,10 +76,10 @@ async def test_concurrent_session_churn():
                 await browser.goto("https://example.com", wait_until="domcontentloaded")
                 assert "Example" in await browser.title()
 
-        with anyio.fail_after(TEST_DEADLINE):
-            async with create_task_group() as tg:
+        async with asyncio.timeout(TEST_DEADLINE):
+            async with asyncio.TaskGroup() as tg:
                 for _ in range(CHURN_SESSIONS):
-                    tg.start_soon(one_session)
+                    tg.create_task(one_session())
 
         assert len(session_uuids) == CHURN_SESSIONS
         leftover = await _wait_records_drained(client, set(session_uuids))

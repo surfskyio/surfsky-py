@@ -15,6 +15,9 @@ logger = logging.getLogger("surfsky")
 
 MAX_MESSAGE = 128 * 1024 * 1024
 
+# How long a close waits for the peer's close frame before it drops the socket
+CLOSE_TIMEOUT = 2.0
+
 EventHandler = Callable[[dict[str, Any], str | None], None]
 
 
@@ -49,7 +52,11 @@ class CDPClient:
 
     async def start(self) -> None:
         self._ws = await connect(
-            self.ws_url, max_size=MAX_MESSAGE, ping_interval=None, open_timeout=None
+            self.ws_url,
+            max_size=MAX_MESSAGE,
+            ping_interval=None,
+            open_timeout=None,
+            close_timeout=CLOSE_TIMEOUT,
         )
         self._reader = asyncio.create_task(self._receive())
 

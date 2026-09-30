@@ -1,5 +1,3 @@
-import pytest
-
 from surfsky.browser.actions import Actions
 
 
@@ -12,7 +10,6 @@ class Recorder(Actions):
         return {"ok": True}
 
 
-@pytest.mark.anyio
 async def test_click_sends_camelcase_params():
     actions = Recorder()
     await actions.click("#a", click_count=2, wait_for_visible=True, pre_delay=0.2)
@@ -21,7 +18,6 @@ async def test_click_sends_camelcase_params():
     ]
 
 
-@pytest.mark.anyio
 async def test_mouse_works_at_a_point():
     actions = Recorder()
     await actions.mouse.click(10, 20, button="left")
@@ -40,7 +36,6 @@ async def test_mouse_works_at_a_point():
     ]
 
 
-@pytest.mark.anyio
 async def test_hover_scroll_and_scroll_into_view():
     actions = Recorder()
     await actions.hover("#a", scroll_into_view=True)
@@ -55,7 +50,6 @@ async def test_hover_scroll_and_scroll_into_view():
     ]
 
 
-@pytest.mark.anyio
 async def test_keyboard_type_and_press():
     actions = Recorder()
     await actions.keyboard.type("hi")
