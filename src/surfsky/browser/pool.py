@@ -12,7 +12,6 @@ gives each a fresh fingerprint and stops every paid session on the way out.
 """
 
 import asyncio
-import copy
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
@@ -74,7 +73,6 @@ class BrowserPool:
         self._idle: list[Browser] = []
         self._owned = 0
         self._plan_full = False
-        self._plan_full_error: Exception | None = None
         self._changed = asyncio.Event()
         self._capacity = 0
         self._slots: asyncio.Semaphore | None = None
@@ -98,7 +96,6 @@ class BrowserPool:
         self._slots = asyncio.Semaphore(self._capacity)
         self._changed = asyncio.Event()
         self._plan_full = False
-        self._plan_full_error = None
         self._owned = 0
         return self
 
@@ -141,11 +138,6 @@ class BrowserPool:
             if self._idle:
                 return self._idle.pop()
             if self._plan_full:
-                if self._owned == 0:
-                    error = self._plan_full_error or RateLimitError(
-                        "parallel browser limit reached", status_code=429
-                    )
-                    raise copy.copy(error)
                 self._changed.clear()
                 await self._changed.wait()
                 continue
@@ -153,13 +145,10 @@ class BrowserPool:
             try:
                 browser = await self._start_browser()
             except BaseException as exc:
-                full = isinstance(exc, Exception) and plan_is_full(exc)
                 self._owned -= 1
-                if full:
-                    self._plan_full = True
-                    self._plan_full_error = exc
+                self._plan_full = plan_is_full(exc) and self._owned > 0
                 self._changed.set()
-                if not full or self._owned == 0:
+                if not self._plan_full:
                     raise
                 logger.info("plan is full, waiting for a browser of ours")
                 continue

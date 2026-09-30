@@ -430,6 +430,22 @@ async def test_lease_raises_when_the_plan_is_full_and_we_hold_nothing(monkeypatc
                 pass
 
 
+async def test_the_next_lease_after_a_refusal_asks_the_server_again(monkeypatch):
+    from surfsky import RateLimitError
+
+    pool = _offline_pool(monkeypatch, concurrency=2)
+    monkeypatch.setattr(
+        pool, "_start_browser", AsyncMock(side_effect=[_plan_full(), FakeBrowser()])
+    )
+    async with pool:
+        with pytest.raises(RateLimitError):
+            async with pool.lease():  # pragma: no cover
+                pass
+        async with pool.lease() as browser:
+            assert browser.use_count == 1
+    assert pool._start_browser.await_count == 2
+
+
 async def test_tearing_down_the_last_browser_wakes_a_waiter(monkeypatch):
     pool = _offline_pool(monkeypatch, concurrency=2)
     first, second = FakeBrowser(), FakeBrowser()
