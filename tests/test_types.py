@@ -1,8 +1,12 @@
+import pytest
+
 from surfsky import (
+    AntiCaptcha,
     BrowserSettings,
     Cookie,
     Fingerprint,
     OneTimeStartRequest,
+    ProfileStartRequest,
     ProxyGeo,
     Session,
 )
@@ -30,6 +34,15 @@ def test_one_time_request_with_geo_proxy():
     body = dump(req)
     assert body["proxy"] == {"country": "us", "region": "california"}
     assert body["browser_settings"] == {"inactive_kill_timeout": 60}
+
+
+def test_anti_captcha_on_both_start_requests():
+    anti = AntiCaptcha(enabled=True, auto_captcha_types=["datadome_click"])
+    sent = {"enabled": True, "auto_captcha_types": ["datadome_click"]}
+    assert dump(OneTimeStartRequest(anti_captcha=anti))["anti_captcha"] == sent
+    assert dump(ProfileStartRequest(anti_captcha=anti))["anti_captcha"] == sent
+    with pytest.raises(ValueError, match="auto_captcha_types"):
+        AntiCaptcha(auto_captcha_types=["datadome_slider"])  # type: ignore[list-item]
 
 
 def test_string_proxy_passthrough():

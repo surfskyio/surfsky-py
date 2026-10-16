@@ -19,9 +19,14 @@ default 30, and raise `BrowserTimeoutError`.
 | `request(method, path, json=None, params=None, ...)` | Raw call. Returns `httpx.Response`, never raises on status. |
 
 Session options: `fingerprint`, `proxy`, `browser_settings`
-(`inactive_kill_timeout`, `cache_enabled`, `cache_key`), `enable_chromedriver`,
+(`inactive_kill_timeout`, `cache_enabled`, `cache_key`), `anti_captcha` (`enabled`,
+`auto_captcha_types`, `gemini_api_key`, `disable_external_providers`,
+`external_providers_initially_enabled`), `enable_chromedriver`,
 `extensions` (up to 5 uuids), `proxy_blacklist`, `domain_routes`, `cookies`.
 `fingerprint` and `cookies` apply to one-time sessions only.
+With `anti_captcha` on, the cloud's `Captcha` CDP domain solves through `send`:
+`Captcha.solve` (`{"type": "datadome_click", "timeout": 60000}`) on a page showing one,
+or `Captcha.autoSolve` before navigating for the `auto_captcha_types`.
 
 ## Pool
 

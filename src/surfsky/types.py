@@ -27,6 +27,20 @@ ProfileOrdering = Literal["created", "-created", "active", "-active", "title", "
 MouseButton = Literal["left", "right", "middle"]
 KeyModifier = Literal["Alt", "Control", "Meta", "Shift"]
 ScrollBehavior = Literal["smooth", "instant"]
+CaptchaType = Literal[
+    "recaptcha",
+    "hcaptcha",
+    "turnstile",
+    "perimeterx",
+    "geetest",
+    "bls",
+    "datadome",
+    "datadome_audio",
+    "datadome_click",
+    "click",
+    "image",
+    "funcaptcha",
+]
 
 
 class Model(BaseModel):
@@ -85,6 +99,14 @@ class BrowserSettings(Request):
     inactive_kill_timeout: int | None = None
     cache_enabled: bool | None = None
     cache_key: str | None = None
+
+
+class AntiCaptcha(Request):
+    enabled: bool | None = None
+    auto_captcha_types: list[CaptchaType] | None = None
+    gemini_api_key: str | None = None
+    disable_external_providers: bool | None = None
+    external_providers_initially_enabled: bool | None = None
 
 
 class ProxyTargeting(Request):
@@ -158,6 +180,7 @@ class OneTimeStartRequest(Request):
     fingerprint: Fingerprint | None = None
     proxy: ProxyLike | None = None
     browser_settings: BrowserSettings | None = None
+    anti_captcha: AntiCaptcha | None = None
     enable_chromedriver: bool | None = None
     extensions: list[str] | None = Field(default=None, max_length=5)
     proxy_blacklist: list[str] | None = None
@@ -177,6 +200,7 @@ class ProfileCreateRequest(Request):
 class ProfileStartRequest(Request):
     proxy: ProxyLike | None = None
     browser_settings: BrowserSettings | None = None
+    anti_captcha: AntiCaptcha | None = None
     enable_chromedriver: bool | None = None
     extensions: list[str] | None = Field(default=None, max_length=5)
     proxy_blacklist: list[str] | None = None
@@ -396,11 +420,13 @@ __all__ = [
     "MouseButton",
     "KeyModifier",
     "ScrollBehavior",
+    "CaptchaType",
     "Noise",
     "MediaDevices",
     "Geolocation",
     "Fingerprint",
     "BrowserSettings",
+    "AntiCaptcha",
     "ProxyGeo",
     "SharedProxy",
     "PremiumProxy",

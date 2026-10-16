@@ -8,6 +8,7 @@ from ..proxy import ProxyInput, aresolve_proxy, resolve_proxy
 from ..transport import Spec, dump, list_of, ref
 from ..types import (
     ActiveProfile,
+    AntiCaptcha,
     BatchDeleteResult,
     BrowserSettings,
     Cookie,
@@ -39,6 +40,7 @@ class SessionOptions(TypedDict, total=False):
     fingerprint: Fingerprint | None
     proxy: ProxyInput | None
     browser_settings: BrowserSettings | None
+    anti_captcha: AntiCaptcha | None
     enable_chromedriver: bool | None
     extensions: list[str] | None
     proxy_blacklist: list[str] | None
