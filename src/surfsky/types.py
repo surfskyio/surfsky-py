@@ -33,6 +33,7 @@ CaptchaType = Literal[
     "turnstile",
     "perimeterx",
     "geetest",
+    "aws_waf",
     "bls",
     "datadome",
     "datadome_audio",
