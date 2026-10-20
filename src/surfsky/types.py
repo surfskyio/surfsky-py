@@ -393,15 +393,6 @@ class Extension(Model):
     updated_at: str | None = None
 
 
-class SessionLimits(Model):
-    has_session_limits: bool | None = None
-    spm: int | None = None
-    remaining: int | None = None
-    used: int | None = None
-    additional_spm: int | None = None
-    reset_time: int | None = None
-
-
 class BrowserLimits(Model):
     has_browser_limits: bool | None = None
     parallel_browsers: int | None = None
@@ -461,6 +452,5 @@ __all__ = [
     "Screen",
     "DeviceModel",
     "Extension",
-    "SessionLimits",
     "BrowserLimits",
 ]

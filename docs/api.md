@@ -174,7 +174,7 @@ Same on both clients.
 | `client.proxies` | `countries()`, `regions(country)`, `cities(country, region)`, `quota()`, `premium_stats()`, `shared_countries()`, `shared_quota()`, `shared_stats()`. The first four need a premium provider on the account. |
 | `client.fingerprints` | `renderers(os, os_arch)`, `screens(os, os_arch)`, `device_models(os=, os_arch=, os_version=, device_type=)` |
 | `client.extensions` | `upload(file, name)` (path, bytes or stream, zip up to 100 MB), `list_all()`, `get(uuid)`, `update(uuid, name=)`, `delete(uuid)` |
-| `client.account` | `session_limits()`, `browser_limits()`, `max_browsers()` |
+| `client.account` | `browser_limits()`, `max_browsers()` |
 
 ## Errors
 

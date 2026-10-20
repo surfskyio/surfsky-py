@@ -177,7 +177,6 @@ def test_every_async_resource_mirrors_its_sync_twin(module: str):
 # a twin wired to the wrong Spec builder passes the parity check above but hits
 # the wrong endpoint. (method, args, kwargs, "VERB /path", the data it parses)
 _ASYNC_CALLS: list[tuple[str, tuple, dict, str, object]] = [
-    ("account.session_limits", (), {}, "GET /users/session-limits", {}),
     ("account.browser_limits", (), {}, "GET /users/browser-limits", {}),
     ("fingerprints.renderers", ("win", "x86"), {}, "GET /fingerprint/renderers", []),
     ("fingerprints.screens", ("win", "x86"), {}, "GET /fingerprint/screens", []),
@@ -264,17 +263,6 @@ async def test_async_max_browsers_takes_the_same_two_shortcuts_as_the_sync_one(
     )
     assert await aclient.account.max_browsers() == DEFAULT_MAX_BROWSERS
     await aclient.aclose()
-
-
-def test_session_limits_report_the_monthly_plan(httpx_mock, client: Surfsky):
-    httpx_mock.add_response(
-        method="GET", url="https://api.test/users/session-limits",
-        json={"success": True, "data": {
-            "has_session_limits": True, "spm": 500, "used": 120, "remaining": 380,
-        }},
-    )
-    limits = client.account.session_limits()
-    assert (limits.spm, limits.remaining) == (500, 380)
 
 
 def test_stop_all_stops_every_running_session(httpx_mock, client: Surfsky):

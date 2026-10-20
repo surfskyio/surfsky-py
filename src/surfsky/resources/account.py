@@ -3,16 +3,12 @@ from typing import TYPE_CHECKING
 
 from ..errors import NotFoundError
 from ..transport import Spec
-from ..types import BrowserLimits, SessionLimits
+from ..types import BrowserLimits
 
 if TYPE_CHECKING:
     from ..client import AsyncSurfsky, Surfsky
 
 DEFAULT_MAX_BROWSERS = 10
-
-
-def session_limits() -> Spec[SessionLimits]:
-    return Spec("GET", "/users/session-limits", parse=SessionLimits.model_validate)
 
 
 def browser_limits() -> Spec[BrowserLimits]:
@@ -27,9 +23,6 @@ def env_max_browsers() -> int | None:
 class Account:
     def __init__(self, client: "Surfsky") -> None:
         self.client = client
-
-    def session_limits(self) -> SessionLimits:
-        return self.client.call(session_limits())
 
     def browser_limits(self) -> BrowserLimits:
         return self.client.call(browser_limits())
@@ -49,9 +42,6 @@ class Account:
 class AsyncAccount:
     def __init__(self, client: "AsyncSurfsky") -> None:
         self.client = client
-
-    async def session_limits(self) -> SessionLimits:
-        return await self.client.call(session_limits())
 
     async def browser_limits(self) -> BrowserLimits:
         return await self.client.call(browser_limits())
