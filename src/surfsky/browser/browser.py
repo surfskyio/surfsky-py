@@ -331,12 +331,18 @@ async def start_session(
     profile_uuid: str | None = None,
     block_resources: frozenset[str] | set[str] | None = None,
     block_urls: Sequence[str] | None = None,
+    command_timeout: float | None = 60.0,
     **options: Unpack[SessionOptions],
 ) -> AsyncIterator[Browser]:
     blocked = normalize_blocked(block_resources)
     urls = normalize_urls(block_urls)
     async with (
         client.session(profile_uuid=profile_uuid, **options) as session,
-        Browser(session, block_resources=blocked, block_urls=urls) as browser,
+        Browser(
+            session,
+            block_resources=blocked,
+            block_urls=urls,
+            command_timeout=command_timeout,
+        ) as browser,
     ):
         yield browser

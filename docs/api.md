@@ -12,7 +12,7 @@ default 30, and raise `BrowserTimeoutError`.
 | Method | Description |
 | --- | --- |
 | `session(profile_uuid=None, **options)` | Start a session, stop it on exit. Yields `Session` with `internal_uuid` and `connect_url`. |
-| `browser(profile_uuid=None, block_resources=None, block_urls=None, **options)` | Start a session and connect a `Browser`. Stops on exit. |
+| `browser(profile_uuid=None, block_resources=None, block_urls=None, command_timeout=60.0, **options)` | Start a session and connect a `Browser`. Stops on exit. `command_timeout` is the seconds one CDP command may take, `None` for no limit. |
 | `browsers(concurrency="auto", block_resources=None, block_urls=None, **options)` | A `BrowserPool`. Exiting it stops every browser. |
 | `map(handler, items, **pool_options)` | `browsers()` and `pool.map()` in one call. |
 | `with_options(timeout=None, max_retries=None, headers=None)` | Copy with overrides. Same connection pool. |

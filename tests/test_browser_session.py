@@ -945,9 +945,10 @@ async def test_start_session_stops_after_close(fake_cdp):
             finally:
                 events.append("stop")
 
-    async with start_session(FakeClient()) as browser:  # type: ignore[arg-type]
+    async with start_session(FakeClient(), command_timeout=200) as browser:  # type: ignore[arg-type]
         events.append("body")
         assert browser.connected
+        assert browser.command_timeout == 200
     assert events == ["start", "body", "stop"]
     assert not fake_cdp.connected
 
