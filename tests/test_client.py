@@ -233,6 +233,16 @@ async def test_async_resource_methods_reach_their_own_endpoint(
     assert (request.method, request.url.path) == (verb, path)
 
 
+async def test_async_scrape_without_a_session_reaches_slash_scrape(httpx_mock):
+    httpx_mock.add_response(
+        method="POST", url="https://api.test/scrape",
+        json={"success": True, "data": {"url": "https://x", "markdown": "# X"}},
+    )
+    async with AsyncSurfsky(api_token="t", base_url="https://api.test") as aclient:
+        result = await aclient.scrape("https://x", formats=["markdown"])
+    assert result.markdown == "# X"
+
+
 async def test_async_create_and_iter_all_reach_their_own_endpoints(httpx_mock):
     # the two that need a body of their own, kept out of the table above
     from surfsky import Fingerprint

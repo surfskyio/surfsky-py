@@ -42,7 +42,7 @@ from .proxy import (
     ProxySource,
     ProxyTemplate,
 )
-from .resources.profiles import ProfileUpdate, SessionOptions
+from .resources.profiles import ProfileUpdate, ScrapeOptions, SessionOptions
 from .types import *  # noqa: F403
 
 __version__ = version("surfsky")
@@ -53,6 +53,7 @@ __all__ = [
     "AsyncSurfsky",
     "SessionOptions",
     "ProfileUpdate",
+    "ScrapeOptions",
     "Browser",
     "Page",
     "BrowserPool",

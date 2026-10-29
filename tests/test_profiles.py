@@ -2,9 +2,17 @@ import asyncio
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from conftest import both_ways, cancelled_after, session_endpoints
-from surfsky import APIError, BadRequestError, Fingerprint
+from surfsky import (
+    APIError,
+    BadRequestError,
+    ClickAction,
+    Fingerprint,
+    ScreenshotOptions,
+    WaitAction,
+)
 
 
 def test_start_one_time_parses_and_sends_snake_case(httpx_mock, client):
@@ -117,6 +125,57 @@ def test_scrape_waits_longer_than_the_client_default(httpx_mock, client):
     default, override = httpx_mock.get_requests()
     assert default.extensions["timeout"]["read"] == 150.0
     assert override.extensions["timeout"]["read"] == 5
+
+
+def test_scrape_without_a_session_posts_one_object_to_slash_scrape(httpx_mock, client):
+    httpx_mock.add_response(
+        method="POST", url="https://api.test/scrape",
+        json={"success": True, "msg": "", "data": {
+            "url": "https://x", "final_url": "https://x/en", "status": 200,
+            "status_text": "OK", "title": "X", "content_type": "text/html",
+            "metadata": {"description": None, "language": "en", "og_title": "X!"},
+            "cookies": [], "content": "<h1>X</h1>", "markdown": "# X",
+            "links": ["https://x/a"],
+        }},
+    )
+    result = client.scrape(
+        "https://x", formats=["html", "markdown", "links"], only_main_content=False,
+        screenshot_options=ScreenshotOptions(full_page=False, format="jpeg"),
+        actions=[ClickAction(selector="#more"), WaitAction(ms=500)],
+        auto_captcha_solve="auto", timeout=20_000, block_resources=[],
+    )
+    assert (result.final_url, result.title, result.content) == ("https://x/en", "X", "<h1>X</h1>")
+    assert result.metadata is not None and result.metadata.og_title == "X!"
+    assert (result.markdown, result.links, result.raw_html) == ("# X", ["https://x/a"], None)
+    [request] = httpx_mock.get_requests()
+    assert json.loads(request.content) == {
+        "url": "https://x", "formats": ["html", "markdown", "links"],
+        "only_main_content": False,
+        "screenshot_options": {"full_page": False, "format": "jpeg"},
+        "timeout": 20000, "auto_captcha_solve": "auto",
+        "actions": [{"type": "click", "selector": "#more"}, {"type": "wait", "ms": 500}],
+        "block_resources": [],  # [] blocks nothing; None leaves the server default
+    }
+    assert request.extensions["timeout"]["read"] == 150.0
+
+
+def test_scrape_rejects_human_actions_before_sending(client):
+    with pytest.raises(ValidationError, match="human_actions"):
+        client.profiles.scrape("sess", "https://x", human_actions=1)
+    with pytest.raises(ValidationError, match="actions"):
+        client.scrape("https://x", actions=[{"type": "evaluate", "js": "1"}])
+
+
+def test_scrape_error_carries_its_code_and_the_page_left_on(httpx_mock, client):
+    httpx_mock.add_response(
+        method="POST", url="https://api.test/scrape", status_code=400,
+        json={"success": False, "msg": "Timeout during waiting for selector",
+              "data": {"content": "<p>half</p>"}, "code": "selector_timeout"},
+    )
+    with pytest.raises(BadRequestError) as info:
+        client.scrape("https://x", wait_for="#late")
+    assert info.value.code == "selector_timeout"
+    assert info.value.body["data"]["content"] == "<p>half</p>"
 
 
 def test_validation_422_is_a_bad_request_naming_the_field(httpx_mock, client):

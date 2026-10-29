@@ -28,9 +28,9 @@ from .resources import (
     Profiles,
     Proxies,
 )
-from .resources.profiles import SessionOptions
+from .resources.profiles import ScrapeOptions, SessionOptions, scrape
 from .transport import AUTH_HEADER, Spec, asend, finish, send
-from .types import Session
+from .types import ScrapeRequest, ScrapeResult, Session
 
 if TYPE_CHECKING:
     from .browser import Browser, BrowserPool, PoolHandler, PoolOptions, PoolOutcome
@@ -148,6 +148,10 @@ class Surfsky:
             timeout=spec.timeout if self.timeout is None else self.timeout,
             headers={**self.headers, **(headers or {})} or None,
         )
+
+    def scrape(self, url: str, **options: Unpack[ScrapeOptions]) -> ScrapeResult:
+        """One page from the cloud's pre-started browsers: no session to start or stop."""
+        return self.call(scrape(None, ScrapeRequest(url=url, **options)))
 
     @contextmanager
     def session(
@@ -277,6 +281,10 @@ class AsyncSurfsky:
             headers={**self.headers, **(headers or {})} or None,
             late=late,
         )
+
+    async def scrape(self, url: str, **options: Unpack[ScrapeOptions]) -> ScrapeResult:
+        """One page from the cloud's pre-started browsers: no session to start or stop."""
+        return await self.call(scrape(None, ScrapeRequest(url=url, **options)))
 
     @asynccontextmanager
     async def session(

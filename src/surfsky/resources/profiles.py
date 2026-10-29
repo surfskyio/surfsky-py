@@ -24,8 +24,12 @@ from ..types import (
     ProfileSummary,
     ProfileUpdateRequest,
     ProxyLike,
+    ScrapeAction,
+    ScrapeFormat,
     ScrapeRequest,
+    ScrapeResource,
     ScrapeResult,
+    ScreenshotOptions,
     Session,
     StopAllResult,
     StorageOptions,
@@ -56,6 +60,22 @@ class ProfileUpdate(TypedDict, total=False):
     storage_options: StorageOptions | None
 
 
+class ScrapeOptions(TypedDict, total=False):
+    formats: list[ScrapeFormat] | None
+    only_main_content: bool | None
+    screenshot: bool | None
+    screenshot_options: ScreenshotOptions | None
+    cookies: str | list[dict[str, Any]] | None
+    wait: float | None
+    wait_until: WaitUntil | None
+    wait_for: str | None
+    timeout: int | None
+    auto_captcha_solve: bool | Literal["auto"] | None
+    actions: list[ScrapeAction] | None
+    block_resources: list[ScrapeResource] | None
+
+
+# the server gives a scrape up to 120s
 SCRAPE_TIMEOUT = 150.0
 IMMUTABLE_FINGERPRINT = ("os", "os_arch", "os_version", "device_model", "device_type")
 COOKIES = TypeAdapter(list[Cookie])
@@ -185,10 +205,12 @@ def import_cookies(
     )
 
 
-def scrape(session: Session | str, request: ScrapeRequest) -> Spec[ScrapeResult]:
+def scrape(session: Session | str | None, request: ScrapeRequest) -> Spec[ScrapeResult]:
+    # no session: POST /scrape, served by the cloud's pre-started browsers
+    path = "/scrape" if session is None else f"/profiles/{session_uuid(session)}/scrape"
     return Spec(
         "POST",
-        f"/profiles/{session_uuid(session)}/scrape",
+        path,
         json=dump(request),
         parse=ScrapeResult.model_validate,
         timeout=SCRAPE_TIMEOUT,
@@ -288,25 +310,9 @@ class Profiles:
         self.client.call(import_cookies(uuid, cookies))
 
     def scrape(
-        self,
-        session: Session | str,
-        url: str,
-        *,
-        screenshot: bool | None = None,
-        wait: float | None = None,
-        wait_until: WaitUntil | None = None,
-        wait_for: str | None = None,
-        human_actions: int | None = None,
+        self, session: Session | str, url: str, **options: Unpack[ScrapeOptions]
     ) -> ScrapeResult:
-        request = ScrapeRequest(
-            url=url,
-            screenshot=screenshot,
-            wait=wait,
-            wait_until=wait_until,
-            wait_for=wait_for,
-            human_actions=human_actions,
-        )
-        return self.client.call(scrape(session, request))
+        return self.client.call(scrape(session, ScrapeRequest(url=url, **options)))
 
 
 class AsyncProfiles:
@@ -405,22 +411,6 @@ class AsyncProfiles:
         await self.client.call(import_cookies(uuid, cookies))
 
     async def scrape(
-        self,
-        session: Session | str,
-        url: str,
-        *,
-        screenshot: bool | None = None,
-        wait: float | None = None,
-        wait_until: WaitUntil | None = None,
-        wait_for: str | None = None,
-        human_actions: int | None = None,
+        self, session: Session | str, url: str, **options: Unpack[ScrapeOptions]
     ) -> ScrapeResult:
-        request = ScrapeRequest(
-            url=url,
-            screenshot=screenshot,
-            wait=wait,
-            wait_until=wait_until,
-            wait_for=wait_for,
-            human_actions=human_actions,
-        )
-        return await self.client.call(scrape(session, request))
+        return await self.client.call(scrape(session, ScrapeRequest(url=url, **options)))

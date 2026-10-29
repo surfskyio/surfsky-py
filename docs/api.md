@@ -11,6 +11,7 @@ default 30, and raise `BrowserTimeoutError`.
 
 | Method | Description |
 | --- | --- |
+| `scrape(url, **options)` | One page from the cloud's pre-started browsers (`POST /scrape`): no session to start or stop. Returns `ScrapeResult`. |
 | `session(profile_uuid=None, **options)` | Start a session, stop it on exit. Yields `Session` with `internal_uuid` and `connect_url`. |
 | `browser(profile_uuid=None, block_resources=None, block_urls=None, command_timeout=60.0, **options)` | Start a session and connect a `Browser`. Stops on exit. `command_timeout` is the seconds one CDP command may take, `None` for no limit. |
 | `browsers(concurrency="auto", block_resources=None, block_urls=None, **options)` | A `BrowserPool`. Exiting it stops every browser. |
@@ -36,6 +37,26 @@ carry the same, `browser.cdp.on(event, handler)` subscribes to them with
 the wallet and `usage.cost_usd` is the amount. Reserved plans are not charged. Left
 out, `types` is the cloud's default list (`recaptcha`, `hcaptcha`, `geetest`,
 `turnstile`, `perimeterx`, `datadome`, `datadome_audio`).
+
+Scrape options, the same for `client.scrape(url)` and `client.profiles.scrape(session, url)`:
+`formats` (`html`, `raw_html`, `markdown`, `links`, `screenshot`; default `["html"]`),
+`only_main_content` (default `True`, applies to `html` and `markdown`),
+`screenshot_options` (`ScreenshotOptions(full_page=True, format="png", quality=None)`),
+`cookies` (set before navigation), `wait` (seconds), `wait_until`, `wait_for`, `timeout`
+(milliseconds, default 30000), `auto_captcha_solve` (`"auto"`, the default, solves only on a
+blocked page answering 403, 405, 429 or 503; `True` also solves widgets on an open page, which
+can add 10 to 60 seconds and costs a captcha charge per solve; `False`), `actions` (up to 10 of
+`ClickAction`, `TypeAction`, `PressAction`, `ScrollAction`, `WaitAction`, run with human
+emulation) and `block_resources` (`None` blocks images, media and fonts unless a screenshot is
+requested or `auto_captcha_solve=True`; `[]` blocks nothing). The server gives a scrape 120
+seconds. `ScrapeResult` has `url`, `final_url`, `status`, `status_text`, `title`,
+`content_type`, `metadata` (`description`, `language`, `canonical_url`, `og_*`), `cookies`,
+and a field per requested format: `content` (cleaned `html`), `raw_html`, `markdown`, `links`
+(absolute URLs), `screenshot` (base64). A scrape that fails raises `BadRequestError` whose
+`code` names the cause (`page_load_timeout`, `selector_timeout`, `site_unreachable`,
+`action_failed`, `captcha_solve_failed`, `captcha_solve_timeout`, `scrape_timeout`,
+`scrape_error`) and whose `body["data"]` can carry the `content` and `screenshot` of the page
+the browser was left on.
 
 ## Pool
 
@@ -169,7 +190,7 @@ Same on both clients.
 
 | Namespace | Methods |
 | --- | --- |
-| `client.profiles` | `start_one_time(**options)`, `start(uuid, **options)`, `stop(session)`, `stop_all()`, `list_active()`, `create(title=, fingerprint=, description=, proxy=, cookies=, storage_options=)`, `get(uuid)`, `update(uuid, **fields)`, `delete(uuid)`, `delete_many(uuids)`, `list_page(page=, page_len=, ordering=)`, `iter_all(page_len=100, ordering="created")`, `export_cookies(uuid, export_format="json")`, `import_cookies(uuid, cookies)`, `scrape(session, url, screenshot=, wait=, wait_until=, wait_for=, human_actions=)` |
+| `client.profiles` | `start_one_time(**options)`, `start(uuid, **options)`, `stop(session)`, `stop_all()`, `list_active()`, `create(title=, fingerprint=, description=, proxy=, cookies=, storage_options=)`, `get(uuid)`, `update(uuid, **fields)`, `delete(uuid)`, `delete_many(uuids)`, `list_page(page=, page_len=, ordering=)`, `iter_all(page_len=100, ordering="created")`, `export_cookies(uuid, export_format="json")`, `import_cookies(uuid, cookies)`, `scrape(session, url, **options)` |
 | `client.proxies` | `countries()`, `regions(country)`, `cities(country, region)`, `quota()`, `premium_stats()`, `shared_countries()`, `shared_quota()`, `shared_stats()`. The first four need a premium provider on the account. |
 | `client.fingerprints` | `renderers(os, os_arch)`, `screens(os, os_arch)`, `device_models(os=, os_arch=, os_version=, device_type=)` |
 | `client.extensions` | `upload(file, name)` (path, bytes or stream, zip up to 100 MB), `list_all()`, `get(uuid)`, `update(uuid, name=)`, `delete(uuid)` |

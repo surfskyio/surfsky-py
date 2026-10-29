@@ -1,4 +1,4 @@
-from typing import Any, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
@@ -7,6 +7,8 @@ OS = Literal["win", "mac", "android"]
 Arch = Literal["x86", "arm"]
 DeviceType = Literal["phone", "tablet"]
 WaitUntil = Literal["domcontentloaded", "load", "networkidle", "commit"]
+ScrapeFormat = Literal["html", "raw_html", "markdown", "links", "screenshot"]
+ScrapeResource = Literal["image", "media", "font", "stylesheet"]
 ProxyType = Literal["residential", "mobile"]
 RegionalPool = Literal[
     "western",
@@ -216,13 +218,65 @@ class ProfileUpdateRequest(Request):
     storage_options: StorageOptions | None = None
 
 
+class ScreenshotOptions(Request):
+    full_page: bool | None = None
+    format: Literal["png", "jpeg"] | None = None
+    quality: int | None = Field(default=None, ge=1, le=100)  # jpeg only
+
+
+class ClickAction(Request):
+    type: Literal["click"] = "click"
+    selector: str
+
+
+class TypeAction(Request):
+    type: Literal["type"] = "type"
+    selector: str
+    text: str
+
+
+class PressAction(Request):
+    type: Literal["press"] = "press"
+    key: str
+
+
+class ScrollAction(Request):
+    """One of `selector` and `direction`."""
+
+    type: Literal["scroll"] = "scroll"
+    selector: str | None = None
+    direction: Literal["up", "down"] | None = None
+
+
+class WaitAction(Request):
+    """One of `ms` and `selector`."""
+
+    type: Literal["wait"] = "wait"
+    ms: int | None = Field(default=None, ge=0, le=60_000)
+    selector: str | None = None
+
+
+ScrapeAction = Annotated[
+    ClickAction | TypeAction | PressAction | ScrollAction | WaitAction,
+    Field(discriminator="type"),
+]
+
+
 class ScrapeRequest(Request):
     url: str
+    formats: list[ScrapeFormat] | None = None
+    only_main_content: bool | None = None
     screenshot: bool | None = None
-    wait: float | None = Field(default=None, ge=0, le=60)
+    screenshot_options: ScreenshotOptions | None = None
+    cookies: str | list[dict[str, Any]] | None = None
+    wait: float | None = Field(default=None, ge=0, le=60)  # seconds
     wait_until: WaitUntil | None = None
     wait_for: str | None = None
-    human_actions: int | None = Field(default=None, ge=0, le=3)
+    timeout: int | None = Field(default=None, gt=0)  # milliseconds, as the API takes it
+    auto_captcha_solve: bool | Literal["auto"] | None = None
+    actions: list[ScrapeAction] | None = Field(default=None, max_length=10)
+    # None is the server default; [] blocks nothing
+    block_resources: list[ScrapeResource] | None = None
 
 
 class InspectorPage(Model):
@@ -298,13 +352,29 @@ class Cookie(CamelModel):
     secure: bool | None = None
 
 
+class ScrapeMetadata(Model):
+    description: str | None = None
+    language: str | None = None
+    canonical_url: str | None = None
+    og_title: str | None = None
+    og_description: str | None = None
+    og_image: str | None = None
+
+
 class ScrapeResult(Model):
     url: str | None = None
+    final_url: str | None = None
     status: int | None = None
     status_text: str | None = None
-    content: str | None = None
+    title: str | None = None
+    content_type: str | None = None
+    metadata: ScrapeMetadata | None = None
     cookies: list[Cookie] = Field(default_factory=list)
-    screenshot: str | None = None  # base64 PNG when requested
+    content: str | None = None  # the "html" format: cleaned HTML
+    raw_html: str | None = None
+    markdown: str | None = None
+    links: list[str] | None = None
+    screenshot: str | None = None  # base64 PNG or JPEG
 
 
 class BatchDeleteResult(Model):
@@ -405,6 +475,8 @@ __all__ = [
     "Arch",
     "DeviceType",
     "WaitUntil",
+    "ScrapeFormat",
+    "ScrapeResource",
     "ProxyType",
     "RegionalPool",
     "ExportFormat",
@@ -429,6 +501,13 @@ __all__ = [
     "ProfileCreateRequest",
     "ProfileStartRequest",
     "ProfileUpdateRequest",
+    "ScreenshotOptions",
+    "ClickAction",
+    "TypeAction",
+    "PressAction",
+    "ScrollAction",
+    "WaitAction",
+    "ScrapeAction",
     "ScrapeRequest",
     "InspectorPage",
     "Inspector",
@@ -438,6 +517,7 @@ __all__ = [
     "ProfileSummary",
     "Profile",
     "Cookie",
+    "ScrapeMetadata",
     "ScrapeResult",
     "BatchDeleteResult",
     "StopAllResult",
