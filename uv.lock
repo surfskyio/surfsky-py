@@ -490,7 +490,7 @@ wheels = [
 
 [[package]]
 name = "surfsky"
-version = "0.0.17"
+version = "0.0.18"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
