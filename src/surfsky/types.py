@@ -7,7 +7,7 @@ OS = Literal["win", "mac", "android"]
 Arch = Literal["x86", "arm"]
 DeviceType = Literal["phone", "tablet"]
 WaitUntil = Literal["domcontentloaded", "load", "networkidle", "commit"]
-ScrapeFormat = Literal["html", "raw_html", "markdown", "links", "screenshot"]
+ScrapeFormat = Literal["html", "raw_html", "markdown", "links", "screenshot", "cookies"]
 ScrapeResource = Literal["image", "media", "font", "stylesheet"]
 ProxyType = Literal["residential", "mobile"]
 RegionalPool = Literal[
@@ -370,7 +370,7 @@ class ScrapeResult(Model):
     title: str | None = None
     content_type: str | None = None
     metadata: ScrapeMetadata | None = None
-    cookies: list[Cookie] = Field(default_factory=list)
+    cookies: list[Cookie] | None = None  # the "cookies" format: the jar after the scrape
     content: str | None = None  # the "html" format: cleaned HTML
     raw_html: str | None = None
     markdown: str | None = None
