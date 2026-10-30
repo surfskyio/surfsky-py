@@ -43,9 +43,9 @@ Scrape options, the same for `client.scrape(url)` and `client.profiles.scrape(se
 `only_main_content` (default `True`, applies to `html` and `markdown`),
 `screenshot_options` (`ScreenshotOptions(full_page=True, format="png", quality=None)`),
 `cookies` (set before navigation), `wait` (seconds), `wait_until`, `wait_for`, `timeout`
-(milliseconds, default 30000), `auto_captcha_solve` (`"auto"`, the default, solves only on a
-blocked page answering 403, 405, 429 or 503; `True` also solves widgets on an open page, which
-can add 10 to 60 seconds and costs a captcha charge per solve; `False`), `actions` (up to 10 of
+(milliseconds, default 30000), `auto_captcha_solve` (default `True`, solves the challenge of a
+blocked page answering 403, 405, 429 or 503, which can add 10 to 60 seconds and costs a captcha
+charge per solve; `False` returns the block page as it is), `actions` (up to 10 of
 `ClickAction`, `TypeAction`, `PressAction`, `ScrollAction`, `WaitAction`, run with human
 emulation) and `block_resources` (`None` blocks images, media and fonts unless a screenshot is
 requested or `auto_captcha_solve=True`; `[]` blocks nothing). The server gives a scrape 120

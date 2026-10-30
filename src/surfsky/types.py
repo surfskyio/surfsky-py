@@ -273,7 +273,8 @@ class ScrapeRequest(Request):
     wait_until: WaitUntil | None = None
     wait_for: str | None = None
     timeout: int | None = Field(default=None, gt=0)  # milliseconds, as the API takes it
-    auto_captcha_solve: bool | Literal["auto"] | None = None
+    # True (the server default) solves the challenge of a blocked page; False returns it as it is
+    auto_captcha_solve: bool | None = None
     actions: list[ScrapeAction] | None = Field(default=None, max_length=10)
     # None is the server default; [] blocks nothing
     block_resources: list[ScrapeResource] | None = None

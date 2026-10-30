@@ -70,7 +70,7 @@ class ScrapeOptions(TypedDict, total=False):
     wait_until: WaitUntil | None
     wait_for: str | None
     timeout: int | None
-    auto_captcha_solve: bool | Literal["auto"] | None
+    auto_captcha_solve: bool | None
     actions: list[ScrapeAction] | None
     block_resources: list[ScrapeResource] | None
 

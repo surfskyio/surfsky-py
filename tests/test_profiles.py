@@ -142,7 +142,7 @@ def test_scrape_without_a_session_posts_one_object_to_slash_scrape(httpx_mock, c
         "https://x", formats=["html", "markdown", "links"], only_main_content=False,
         screenshot_options=ScreenshotOptions(full_page=False, format="jpeg"),
         actions=[ClickAction(selector="#more"), WaitAction(ms=500)],
-        auto_captcha_solve="auto", timeout=20_000, block_resources=[],
+        auto_captcha_solve=False, timeout=20_000, block_resources=[],
     )
     assert (result.final_url, result.title, result.content) == ("https://x/en", "X", "<h1>X</h1>")
     assert result.metadata is not None and result.metadata.og_title == "X!"
@@ -152,7 +152,7 @@ def test_scrape_without_a_session_posts_one_object_to_slash_scrape(httpx_mock, c
         "url": "https://x", "formats": ["html", "markdown", "links"],
         "only_main_content": False,
         "screenshot_options": {"full_page": False, "format": "jpeg"},
-        "timeout": 20000, "auto_captcha_solve": "auto",
+        "timeout": 20000, "auto_captcha_solve": False,
         "actions": [{"type": "click", "selector": "#more"}, {"type": "wait", "ms": 500}],
         "block_resources": [],  # [] blocks nothing; None leaves the server default
     }
