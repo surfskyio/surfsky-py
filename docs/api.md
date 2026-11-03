@@ -13,8 +13,8 @@ default 30, and raise `BrowserTimeoutError`.
 | --- | --- |
 | `scrape(url, **options)` | One page from the cloud's pre-started browsers (`POST /scrape`): no session to start or stop. Returns `ScrapeResult`. |
 | `session(profile_uuid=None, **options)` | Start a session, stop it on exit. Yields `Session` with `internal_uuid` and `connect_url`. |
-| `browser(profile_uuid=None, block_resources=None, block_urls=None, command_timeout=60.0, **options)` | Start a session and connect a `Browser`. Stops on exit. `command_timeout` is the seconds one CDP command may take, `None` for no limit. |
-| `browsers(concurrency="auto", block_resources=None, block_urls=None, **options)` | A `BrowserPool`. Exiting it stops every browser. |
+| `browser(profile_uuid=None, block_resources=None, block_urls=None, allow_urls=None, command_timeout=60.0, **options)` | Start a session and connect a `Browser`. Stops on exit. `allow_urls` are URL substrings never blocked by `block_resources` or `block_urls`, such as a captcha provider's host. `command_timeout` is the seconds one CDP command may take, `None` for no limit. |
+| `browsers(concurrency="auto", block_resources=None, block_urls=None, allow_urls=None, **options)` | A `BrowserPool`. Exiting it stops every browser. |
 | `map(handler, items, **pool_options)` | `browsers()` and `pool.map()` in one call. |
 | `with_options(timeout=None, max_retries=None, headers=None)` | Copy with overrides. Same connection pool. |
 | `request(method, path, json=None, params=None, ...)` | Raw call. Returns `httpx.Response`, never raises on status. |
@@ -43,21 +43,26 @@ Scrape options, the same for `client.scrape(url)` and `client.profiles.scrape(se
 `only_main_content` (default `True`, applies to `html` and `markdown`),
 `screenshot_options` (`ScreenshotOptions(full_page=True, format="png", quality=None)`),
 `cookies` (set before navigation), `wait` (seconds), `wait_until`, `wait_for`, `timeout`
-(milliseconds, default 30000), `auto_captcha_solve` (default `True`, solves the challenge of a
-blocked page answering 403, 405, 429 or 503, which can add 10 to 60 seconds and costs a captcha
-charge per solve; `False` returns the block page as it is), `actions` (up to 10 of
-`ClickAction`, `TypeAction`, `PressAction`, `ScrollAction`, `WaitAction`, run with human
-emulation) and `block_resources` (`None` blocks images, media and fonts unless a screenshot is
-requested or `auto_captcha_solve=True`; `[]` blocks nothing). The server gives a scrape 120
-seconds. `ScrapeResult` has `url`, `final_url`, `status`, `status_text`, `title`,
-`content_type`, `metadata` (`description`, `language`, `canonical_url`, `og_*`), and a field
-per requested format: `content` (cleaned `html`), `raw_html`, `markdown`, `links` (absolute
-URLs), `screenshot` (base64), `cookies` (the jar after the scrape, accepted as `cookies` of the
-next request). A scrape that fails raises `BadRequestError` whose
-`code` names the cause (`page_load_timeout`, `selector_timeout`, `site_unreachable`,
-`action_failed`, `captcha_solve_failed`, `captcha_solve_timeout`, `scrape_timeout`,
-`scrape_error`) and whose `body["data"]` can carry the `content` and `screenshot` of the page
-the browser was left on.
+(milliseconds, default 30000), `auto_captcha_solve` (default `True`, solves every captcha the
+scrape meets, on a challenge page and on the target page, paid types included; a solve can add
+10 to 60 seconds and costs a captcha charge. `False` solves nothing, and `challenge` is still
+set), `actions` (up to 10 of `ClickAction`, `TypeAction`, `PressAction`, `ScrollAction`,
+`WaitAction`, `SolveAction`, run with human emulation; `SolveAction` solves the captcha on the
+page at that step, even with `auto_captcha_solve=False`) and `block_resources` (`None` blocks
+images, media and fonts unless a screenshot is requested, and unblocks them before a captcha is
+solved; `[]` blocks nothing). The server gives a scrape 120 seconds. `ScrapeResult` has `url`,
+`final_url`, `status`, `status_text`, `title`, `content_type`, `metadata` (`description`,
+`language`, `canonical_url`, `og_*`), and a field per requested format: `content` (cleaned
+`html`), `raw_html`, `markdown`, `links` (absolute URLs), `screenshot` (base64), `cookies` (the
+jar after the scrape, accepted as `cookies` of the next request). `challenge` is `None` or the
+last challenge page, block page or page captcha the scrape met: `kind` (`challenge_page`,
+`block_page` or `page_captcha`), `captcha` (the captcha type, `None` without a widget),
+`solved` (`True` once the page behind a challenge page loaded or the page captcha was solved;
+`False` if it was still there at the end, which does not raise) and `cost` (all captcha charges
+of the request as a decimal string, `"0"` for none). A scrape that fails raises
+`BadRequestError` whose `code` names the cause (`page_load_timeout`, `selector_timeout`,
+`site_unreachable`, `action_failed`, `scrape_timeout`, `scrape_error`) and whose `body["data"]`
+can carry the `content` and `screenshot` of the page the browser was left on.
 
 ## Pool
 

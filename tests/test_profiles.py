@@ -136,6 +136,7 @@ def test_scrape_without_a_session_posts_one_object_to_slash_scrape(httpx_mock, c
             "metadata": {"description": None, "language": "en", "og_title": "X!"},
             "cookies": [], "content": "<h1>X</h1>", "markdown": "# X",
             "links": ["https://x/a"],
+            "challenge": {"kind": "challenge_page", "captcha": "turnstile", "solved": True, "cost": "0.002"},
         }},
     )
     result = client.scrape(
@@ -147,6 +148,10 @@ def test_scrape_without_a_session_posts_one_object_to_slash_scrape(httpx_mock, c
     assert (result.final_url, result.title, result.content) == ("https://x/en", "X", "<h1>X</h1>")
     assert result.metadata is not None and result.metadata.og_title == "X!"
     assert (result.markdown, result.links, result.raw_html) == ("# X", ["https://x/a"], None)
+    assert result.challenge is not None and result.challenge.captcha == "turnstile"
+    assert (result.challenge.kind, result.challenge.solved, result.challenge.cost) == (
+        "challenge_page", True, "0.002",
+    )
     [request] = httpx_mock.get_requests()
     assert json.loads(request.content) == {
         "url": "https://x", "formats": ["html", "markdown", "links"],

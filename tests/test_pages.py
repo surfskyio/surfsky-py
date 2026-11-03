@@ -310,6 +310,19 @@ async def test_a_blocked_request_in_a_popup_is_answered_on_the_popup_session(cdp
         assert (popup.status, browser.status) == (503, None)
 
 
+async def test_an_allowed_url_loads_although_its_type_is_blocked(cdp):
+    allowed = ["challenges.cloudflare.com"]
+    async with make_browser(block_resources={"image"}, allow_urls=allowed):
+        paused = cdp.handlers["Fetch.requestPaused"]
+        paused({"requestId": "r1", "request": {"url": "https://challenges.cloudflare.com/a.png"}}, "S1")
+        paused({"requestId": "r2", "request": {"url": "https://x.test/a.png"}}, "S1")
+        await settle()
+        assert cdp.sent("Fetch.continueRequest") == [({"requestId": "r1"}, "S1")]
+        assert cdp.sent("Fetch.failRequest") == [
+            ({"requestId": "r2", "errorReason": "BlockedByClient"}, "S1")
+        ]
+
+
 async def test_a_popup_the_site_closes_drops_out_and_refuses_commands(cdp):
     async with make_browser() as browser:
         session = cdp.attach(POPUP)

@@ -797,8 +797,13 @@ class Page(Actions):
         if request_id is None:
             logger.warning("Fetch.requestPaused without a requestId")
             return
-        params = {"requestId": request_id, "errorReason": "BlockedByClient"}
-        self._spawn(self._send("Fetch.failRequest", params))
+        url = (event.get("request") or {}).get("url", "")
+        if any(fragment in url for fragment in self._browser.allowed_urls):
+            command, params = "Fetch.continueRequest", {"requestId": request_id}
+        else:
+            command = "Fetch.failRequest"
+            params = {"requestId": request_id, "errorReason": "BlockedByClient"}
+        self._spawn(self._send(command, params))
 
     def _spawn(self, coro: Coroutine[Any, Any, Any]) -> None:
         self._browser._spawn(coro)

@@ -1432,5 +1432,5 @@ async def test_the_isolated_world_is_made_again_after_a_navigation():
 
 def test_a_bare_string_of_url_patterns_is_refused():
     # a str is a Sequence too: "*.png" would become "*", ".", "p"... and "*" blocks everything
-    with pytest.raises(TypeError, match="list of patterns"):
+    with pytest.raises(TypeError, match="list of strings"):
         make_browser(block_urls="*.png")

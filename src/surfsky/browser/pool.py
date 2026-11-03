@@ -43,6 +43,7 @@ class PoolOptions(SessionOptions, total=False):
     concurrency: int | Literal["auto"]
     block_resources: frozenset[str] | set[str] | None
     block_urls: Sequence[str] | None
+    allow_urls: Sequence[str] | None
 
 
 class StopRun(Exception): ...
@@ -66,6 +67,7 @@ class BrowserPool:
         self._concurrency = options.pop("concurrency", "auto")
         self.blocked_resources = normalize_blocked(options.pop("block_resources", None))
         self.blocked_urls = normalize_urls(options.pop("block_urls", None))
+        self.allowed_urls = normalize_urls(options.pop("allow_urls", None), "allow_urls")
         probe: dict[str, Any] = {**options, "proxy": None}
         OneTimeStartRequest(**probe)
         validate_proxy(options.get("proxy"))
@@ -207,6 +209,7 @@ class BrowserPool:
                 session,
                 block_resources=self.blocked_resources,
                 block_urls=self.blocked_urls,
+                allow_urls=self.allowed_urls,
             )
             await browser.connect()
         except BaseException:

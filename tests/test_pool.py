@@ -764,7 +764,7 @@ async def test_release_forgets_captures_and_the_dialog_handler(monkeypatch):
 
 
 def test_the_pool_refuses_a_bare_string_of_url_patterns():
-    with pytest.raises(TypeError, match="list of patterns"):
+    with pytest.raises(TypeError, match="list of strings"):
         BrowserPool(client=None, block_urls="*.png")  # type: ignore[arg-type]
 
 

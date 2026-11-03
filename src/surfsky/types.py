@@ -241,23 +241,23 @@ class PressAction(Request):
 
 
 class ScrollAction(Request):
-    """One of `selector` and `direction`."""
-
     type: Literal["scroll"] = "scroll"
     selector: str | None = None
     direction: Literal["up", "down"] | None = None
 
 
 class WaitAction(Request):
-    """One of `ms` and `selector`."""
-
     type: Literal["wait"] = "wait"
     ms: int | None = Field(default=None, ge=0, le=60_000)
     selector: str | None = None
 
 
+class SolveAction(Request):
+    type: Literal["solve"] = "solve"
+
+
 ScrapeAction = Annotated[
-    ClickAction | TypeAction | PressAction | ScrollAction | WaitAction,
+    ClickAction | TypeAction | PressAction | ScrollAction | WaitAction | SolveAction,
     Field(discriminator="type"),
 ]
 
@@ -273,10 +273,8 @@ class ScrapeRequest(Request):
     wait_until: WaitUntil | None = None
     wait_for: str | None = None
     timeout: int | None = Field(default=None, gt=0)  # milliseconds, as the API takes it
-    # True (the server default) solves the challenge of a blocked page; False returns it as it is
     auto_captcha_solve: bool | None = None
     actions: list[ScrapeAction] | None = Field(default=None, max_length=10)
-    # None is the server default; [] blocks nothing
     block_resources: list[ScrapeResource] | None = None
 
 
@@ -362,6 +360,13 @@ class ScrapeMetadata(Model):
     og_image: str | None = None
 
 
+class ScrapeChallenge(Model):
+    kind: Literal["challenge_page", "block_page", "page_captcha"] | str
+    captcha: CaptchaType | str | None = None
+    solved: bool
+    cost: str
+
+
 class ScrapeResult(Model):
     url: str | None = None
     final_url: str | None = None
@@ -370,6 +375,7 @@ class ScrapeResult(Model):
     title: str | None = None
     content_type: str | None = None
     metadata: ScrapeMetadata | None = None
+    challenge: ScrapeChallenge | None = None
     cookies: list[Cookie] | None = None  # the "cookies" format: the jar after the scrape
     content: str | None = None  # the "html" format: cleaned HTML
     raw_html: str | None = None
@@ -508,6 +514,7 @@ __all__ = [
     "PressAction",
     "ScrollAction",
     "WaitAction",
+    "SolveAction",
     "ScrapeAction",
     "ScrapeRequest",
     "InspectorPage",
@@ -519,6 +526,7 @@ __all__ = [
     "Profile",
     "Cookie",
     "ScrapeMetadata",
+    "ScrapeChallenge",
     "ScrapeResult",
     "BatchDeleteResult",
     "StopAllResult",

@@ -71,11 +71,13 @@ def normalize_blocked(resources: frozenset[str] | set[str] | None) -> frozenset[
     return blocked
 
 
-def normalize_urls(patterns: Sequence[str] | None) -> tuple[str, ...]:
+def normalize_urls(
+    urls: Sequence[str] | None, param: str = "block_urls"
+) -> tuple[str, ...]:
     # a str is a Sequence too: "*.png" would become "*", ".", "p"... and "*" blocks all
-    if isinstance(patterns, str):
-        raise TypeError("block_urls takes a list of patterns, not 1 string")
-    return tuple(patterns or ())
+    if isinstance(urls, str):
+        raise TypeError(f"{param} takes a list of strings, not 1 string")
+    return tuple(urls or ())
 
 
 class Browser(Page):
@@ -87,6 +89,7 @@ class Browser(Page):
         *,
         block_resources: frozenset[str] | set[str] | None = None,
         block_urls: Sequence[str] | None = None,
+        allow_urls: Sequence[str] | None = None,
         connect_timeout: float = 30.0,
         command_timeout: float | None = 60.0,
     ) -> None:
@@ -95,6 +98,7 @@ class Browser(Page):
         self.data: dict[str, Any] = {}
         self.blocked_resources = normalize_blocked(block_resources)
         self.blocked_urls = normalize_urls(block_urls)
+        self.allowed_urls = normalize_urls(allow_urls, "allow_urls")
         self.connect_timeout = connect_timeout
         self.command_timeout = command_timeout
         self._client: CDPClient | None = None
@@ -331,17 +335,20 @@ async def start_session(
     profile_uuid: str | None = None,
     block_resources: frozenset[str] | set[str] | None = None,
     block_urls: Sequence[str] | None = None,
+    allow_urls: Sequence[str] | None = None,
     command_timeout: float | None = 60.0,
     **options: Unpack[SessionOptions],
 ) -> AsyncIterator[Browser]:
     blocked = normalize_blocked(block_resources)
-    urls = normalize_urls(block_urls)
+    blocked_urls = normalize_urls(block_urls)
+    allowed_urls = normalize_urls(allow_urls, "allow_urls")
     async with (
         client.session(profile_uuid=profile_uuid, **options) as session,
         Browser(
             session,
             block_resources=blocked,
-            block_urls=urls,
+            block_urls=blocked_urls,
+            allow_urls=allowed_urls,
             command_timeout=command_timeout,
         ) as browser,
     ):

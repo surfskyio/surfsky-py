@@ -305,6 +305,7 @@ class AsyncSurfsky:
         profile_uuid: str | None = None,
         block_resources: frozenset[str] | set[str] | None = None,
         block_urls: Sequence[str] | None = None,
+        allow_urls: Sequence[str] | None = None,
         command_timeout: float | None = 60.0,
         **options: Unpack[SessionOptions],
     ) -> AbstractAsyncContextManager["Browser"]:
@@ -315,6 +316,7 @@ class AsyncSurfsky:
             profile_uuid=profile_uuid,
             block_resources=block_resources,
             block_urls=block_urls,
+            allow_urls=allow_urls,
             command_timeout=command_timeout,
             **options,
         )
