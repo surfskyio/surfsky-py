@@ -230,6 +230,7 @@ class Browser(Page):
 
     async def close(self) -> None:
         async def stop() -> None:
+            self._closed = True
             with suppress(TimeoutError):
                 async with asyncio.timeout(5):
                     pending, self._pending = list(self._pending), set()
@@ -237,17 +238,17 @@ class Browser(Page):
                         task.cancel()
                     if pending:
                         await asyncio.gather(*pending, return_exceptions=True)
+                    if self._client is not None and self.browser_context_id:
+                        with suppress(Exception):
+                            await self._client.send(
+                                "Target.disposeBrowserContext",
+                                {"browserContextId": self.browser_context_id},
+                            )
+                        await asyncio.gather(*self._pending, return_exceptions=True)
                     client, self._client = self._client, None
                     if client is not None:
                         with suppress(Exception):
-                            if self.browser_context_id:
-                                await client.send(
-                                    "Target.disposeBrowserContext",
-                                    {"browserContextId": self.browser_context_id},
-                                )
-                        with suppress(Exception):
                             await client.stop()
-            self._closed = True
 
         await finish(stop())
 
@@ -295,7 +296,7 @@ class Browser(Page):
             or other_context
             or (url.startswith(NON_WEB_SCHEMES) and not adopt)
         ):
-            self._spawn(self._let_go(session, waiting))
+            self._spawn(self._detach(session, waiting))
             return
         if self._session_id:
             page = Page(self, info["targetId"], session)
@@ -308,8 +309,8 @@ class Browser(Page):
         self._changed.set()
         self._spawn(page._setup(waiting))
 
-    async def _let_go(self, session: str, waiting: bool) -> None:
-        async with deadline(self.command_timeout, "the target did not let go"):
+    async def _detach(self, session: str, waiting: bool) -> None:
+        async with deadline(self.command_timeout, "the target did not detach"):
             if waiting:
                 await self.cdp.send("Runtime.runIfWaitingForDebugger", session_id=session)
             await self.cdp.send("Target.detachFromTarget", {"sessionId": session})
@@ -322,14 +323,14 @@ class Browser(Page):
         self._drop(page)
 
     def _drop(self, page: Page) -> None:
+        if page is self and not self._closed:
+            logger.warning(f"page target gone for {self.internal_uuid}")
+            self.retire()
         self._pages.pop(page._session_id, None)
         page._closed = True
         self._changed.set()
         if page._waiter is not None:
             page._waiter.fail("page closed")
-        if page is self and self.connected:
-            logger.warning(f"page target gone for {self.internal_uuid}")
-            self.retire()
 
     def _to_page(self, handler: Callable[[Page, dict[str, Any]], None]) -> EventHandler:
         def route(event: dict[str, Any], session_id: str | None) -> None:
@@ -346,14 +347,16 @@ class Browser(Page):
                 page._waiter.fail("CDP connection closed")
 
     def _spawn(self, coro: Coroutine[Any, Any, Any]) -> None:
-        task = asyncio.create_task(coro)
-        self._pending.add(task)
-        task.add_done_callback(self._reap)
+        async def run() -> None:
+            try:
+                await coro
+            except Exception as error:
+                logger.debug(f"a command sent from an event handler failed: {error}")
 
-    def _reap(self, task: asyncio.Task[Any]) -> None:
-        self._pending.discard(task)
-        if not task.cancelled() and (error := task.exception()) is not None:
-            logger.debug(f"a command sent from an event handler failed: {error}")
+        task = asyncio.create_task(run())
+        self._pending.add(task)
+        task.add_done_callback(self._pending.discard)
+        task.add_done_callback(lambda _: coro.close())
 
 
 @asynccontextmanager

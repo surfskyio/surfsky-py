@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 import pytest
 
@@ -29,6 +30,7 @@ class AttachingCDP(PostsViaSend):
         self.delay: dict[str, float] = {}  # method -> seconds before it answers
         self.rejected: dict[str, str] = {}  # method -> session it fails on
         self.loads = True  # whether a navigation reaches load on its own
+        self.during_dispose: list[dict] = []  # pages another client opens meanwhile
         self._sessions = 0
         self._targets: dict[str, str] = {}  # session -> target, for events
         self._contexts: dict[str, str | None] = {}  # session -> browser context
@@ -74,6 +76,8 @@ class AttachingCDP(PostsViaSend):
             case "Target.createBrowserContext":
                 return {"browserContextId": "C1"}
             case "Target.disposeBrowserContext":
+                for info in self.during_dispose:
+                    self.attach(info, waiting=True)
                 for session, context in list(self._contexts.items()):
                     if context == params["browserContextId"]:
                         self.detach(session, self._targets[session])
@@ -183,7 +187,7 @@ async def test_connect_creates_a_page_when_the_session_has_none(cdp):
         assert browser.pages == [browser]
 
 
-async def test_targets_that_are_not_web_pages_are_let_go(cdp):
+async def test_targets_that_are_not_web_pages_are_detached(cdp):
     cdp.targets = [
         {"type": "page", "targetId": "EXT", "url": "chrome-extension://abc/options.html"},
         {"type": "service_worker", "targetId": "SW", "url": "https://a.test/sw.js"},
@@ -216,7 +220,7 @@ async def test_a_decorated_startup_tab_is_still_the_startup_tab(cdp):
         assert "Target.createTarget" not in [method for method, _, _ in cdp.calls]
 
 
-async def test_a_start_page_opened_after_connect_is_let_go(cdp):
+async def test_a_start_page_opened_after_connect_is_detached(cdp):
     async with make_browser() as browser:
         cdp.attach({"type": "page", "targetId": "N", "url": "chrome://newtab/"})
         await settle()
@@ -224,7 +228,7 @@ async def test_a_start_page_opened_after_connect_is_let_go(cdp):
         assert cdp.sent("Target.detachFromTarget") == [({"sessionId": "S2"}, None)]
 
 
-async def test_another_chrome_page_is_still_let_go(cdp):
+async def test_another_chrome_page_is_still_detached(cdp):
     cdp.targets = [{"type": "page", "targetId": "SET", "url": "chrome://settings/"}, MAIN]
     async with make_browser() as browser:
         await settle()
@@ -232,17 +236,18 @@ async def test_another_chrome_page_is_still_let_go(cdp):
         assert cdp.sent("Target.detachFromTarget") == [({"sessionId": "S1"}, None)]
 
 
-async def test_a_let_go_that_never_answers_gives_up(cdp):
+async def test_a_detach_that_never_answers_ends_its_task(cdp, caplog):
+    caplog.set_level(logging.DEBUG, logger="surfsky")
     cdp.delay["Target.detachFromTarget"] = 5
     async with make_browser(command_timeout=0.05) as browser:
         running = set(browser._pending)  # the keepalive loop, which never finishes
         cdp.attach({"type": "service_worker", "targetId": "SW", "url": ""})
-        [let_go] = set(browser._pending) - running
-        with pytest.raises(BrowserTimeoutError):
-            await asyncio.wait_for(let_go, 1)
+        [detach] = set(browser._pending) - running
+        assert await asyncio.wait_for(detach, 1) is None
+    assert "the target did not detach" in caplog.text
 
 
-async def test_a_paused_target_that_is_not_ours_is_resumed_before_it_is_let_go(cdp):
+async def test_a_paused_target_that_is_not_ours_is_resumed_before_it_is_detached(cdp):
     async with make_browser():
         cdp.attach({"type": "service_worker", "targetId": "SW", "url": ""}, waiting=True)
         await settle()
@@ -281,6 +286,15 @@ async def test_a_browser_in_a_new_context_takes_only_the_pages_that_open_in_it(c
         )
         assert [m for m, _, s in cdp.calls if s == "S2"] == ["Runtime.runIfWaitingForDebugger"]
         assert cdp.sent("Target.detachFromTarget") == [({"sessionId": "S2"}, None)]
+
+
+async def test_a_page_another_client_opens_while_the_context_is_disposed_is_resumed(cdp):
+    cdp.targets = []
+    cdp.during_dispose = [{**BUSY, "url": ""}]
+    async with make_browser(new_context=True):
+        pass
+    [session] = [s for s, target in cdp._targets.items() if target == "B"]
+    assert ("Runtime.runIfWaitingForDebugger", {}, session) in cdp.calls
 
 
 async def test_closing_a_browser_in_a_new_context_disposes_the_context(cdp, caplog):
