@@ -31,6 +31,7 @@ class AttachingCDP(PostsViaSend):
         self.loads = True  # whether a navigation reaches load on its own
         self._sessions = 0
         self._targets: dict[str, str] = {}  # session -> target, for events
+        self._contexts: dict[str, str | None] = {}  # session -> browser context
 
     def on(self, event, handler) -> None:
         self.handlers[event] = handler
@@ -45,6 +46,7 @@ class AttachingCDP(PostsViaSend):
         self._sessions += 1
         session = f"S{self._sessions}"
         self._targets[session] = info["targetId"]
+        self._contexts[session] = info.get("browserContextId")
         self.handlers["Target.attachedToTarget"](
             {"sessionId": session, "targetInfo": info, "waitingForDebugger": waiting},
             None,
@@ -69,9 +71,16 @@ class AttachingCDP(PostsViaSend):
             case "Target.setAutoAttach":
                 for info in self.targets:
                     self.attach(info)
+            case "Target.createBrowserContext":
+                return {"browserContextId": "C1"}
+            case "Target.disposeBrowserContext":
+                for session, context in list(self._contexts.items()):
+                    if context == params["browserContextId"]:
+                        self.detach(session, self._targets[session])
             case "Target.createTarget":
                 target = f"T{self._sessions + 1}"
                 page = {"type": "page", "targetId": target, "url": "about:blank"}
+                page["browserContextId"] = params.get("browserContextId")
                 self.attach(page, waiting=True)  # Chrome reports it before it replies
                 return {"targetId": target}
             case "Target.getTargetInfo":
@@ -239,6 +248,46 @@ async def test_a_paused_target_that_is_not_ours_is_resumed_before_it_is_let_go(c
         await settle()
         assert [m for m, _, s in cdp.calls if s == "S2"] == ["Runtime.runIfWaitingForDebugger"]
         assert cdp.sent("Target.detachFromTarget") == [({"sessionId": "S2"}, None)]
+
+
+BUSY = {"type": "page", "targetId": "B", "url": "https://busy.test/", "browserContextId": "C0"}
+
+
+async def test_a_browser_in_a_new_context_leaves_the_pages_of_other_contexts_alone(cdp):
+    cdp.targets = [BUSY]
+    async with make_browser(new_context=True) as browser:
+        await settle()
+        assert browser.browser_context_id == "C1"
+        assert cdp.sent("Target.createTarget") == [
+            ({"url": "about:blank", "browserContextId": "C1"}, None)
+        ]
+        assert browser.target_id == "T2"
+        assert browser.pages == [browser]
+        assert [m for m, _, s in cdp.calls if s == "S1"] == []  # not set up
+        assert cdp.sent("Target.detachFromTarget") == [({"sessionId": "S1"}, None)]
+
+
+async def test_a_browser_in_a_new_context_takes_only_the_pages_that_open_in_it(cdp):
+    cdp.targets = []
+    async with make_browser(new_context=True) as browser:
+        cdp.attach({**BUSY, "url": ""}, waiting=True)
+        cdp.attach({**POPUP, "browserContextId": "C1"}, waiting=True)  # S3
+        page = await browser.new_page()
+        await settle()
+        assert [p.target_id for p in browser.pages] == ["T1", "P", page.target_id]
+        assert cdp.sent("Target.createTarget")[-1] == (
+            {"url": "about:blank", "newWindow": True, "browserContextId": "C1"},
+            None,
+        )
+        assert [m for m, _, s in cdp.calls if s == "S2"] == ["Runtime.runIfWaitingForDebugger"]
+        assert cdp.sent("Target.detachFromTarget") == [({"sessionId": "S2"}, None)]
+
+
+async def test_closing_a_browser_in_a_new_context_disposes_the_context(cdp, caplog):
+    async with make_browser(new_context=True):
+        pass
+    assert cdp.sent("Target.disposeBrowserContext") == [({"browserContextId": "C1"}, None)]
+    assert "page target gone" not in caplog.text
 
 
 async def test_a_popup_is_listed_and_driven_on_its_own_session(cdp):

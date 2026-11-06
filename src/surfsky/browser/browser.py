@@ -81,7 +81,12 @@ def normalize_urls(
 
 
 class Browser(Page):
-    """A connected cloud browser, and the page its session started with."""
+    """A connected cloud browser, and the page its session started with.
+
+    With ``new_context=True`` it opens a browser context of its own and works only
+    in that context's pages, so several browsers can share one Chrome; ``close()``
+    disposes the context.
+    """
 
     def __init__(
         self,
@@ -92,9 +97,13 @@ class Browser(Page):
         allow_urls: Sequence[str] | None = None,
         connect_timeout: float = 30.0,
         command_timeout: float | None = 60.0,
+        new_context: bool = False,
     ) -> None:
         super().__init__(self, "", "")
         self.session = session
+        self.new_context = new_context
+        self.browser_context_id: str | None = None
+        self._context: dict[str, str] = {}
         self.data: dict[str, Any] = {}
         self.blocked_resources = normalize_blocked(block_resources)
         self.blocked_urls = normalize_urls(block_urls)
@@ -157,7 +166,8 @@ class Browser(Page):
     async def new_page(self) -> Page:
         async with deadline(self.command_timeout, "the new page did not open"):
             created = await self.cdp.send(
-                "Target.createTarget", {"url": "about:blank", "newWindow": True}
+                "Target.createTarget",
+                {"url": "about:blank", "newWindow": True, **self._context},
             )
             return await self._page_ready(created["targetId"])
 
@@ -202,11 +212,15 @@ class Browser(Page):
                 client.on("Network.responseReceived", self._to_page(Page._on_response))
                 client.on("Network.loadingFinished", self._to_page(Page._on_body_ready))
                 client.on("Page.javascriptDialogOpening", self._to_page(Page._on_dialog))
+                if self.new_context:
+                    created = await client.send("Target.createBrowserContext")
+                    self.browser_context_id = created["browserContextId"]
+                    self._context = {"browserContextId": self.browser_context_id}
                 await client.send("Target.setAutoAttach", AUTO_ATTACH)
                 await client.send("Target.getTargets")
                 if not self._session_id:  # nothing to reuse
                     created = await client.send(
-                        "Target.createTarget", {"url": "about:blank"}
+                        "Target.createTarget", {"url": "about:blank", **self._context}
                     )
                     await self._page_ready(created["targetId"])
                 await self._wait_ready()
@@ -225,6 +239,12 @@ class Browser(Page):
                         await asyncio.gather(*pending, return_exceptions=True)
                     client, self._client = self._client, None
                     if client is not None:
+                        with suppress(Exception):
+                            if self.browser_context_id:
+                                await client.send(
+                                    "Target.disposeBrowserContext",
+                                    {"browserContextId": self.browser_context_id},
+                                )
                         with suppress(Exception):
                             await client.stop()
             self._closed = True
@@ -266,7 +286,15 @@ class Browser(Page):
         waiting = bool(event.get("waitingForDebugger"))
         url = info.get("url", "")
         adopt = not self._session_id and _is_start_page(url)
-        if info.get("type") != "page" or (url.startswith(NON_WEB_SCHEMES) and not adopt):
+        other_context = (
+            self.browser_context_id is not None
+            and info.get("browserContextId") != self.browser_context_id
+        )
+        if (
+            info.get("type") != "page"
+            or other_context
+            or (url.startswith(NON_WEB_SCHEMES) and not adopt)
+        ):
             self._spawn(self._let_go(session, waiting))
             return
         if self._session_id:
@@ -299,7 +327,7 @@ class Browser(Page):
         self._changed.set()
         if page._waiter is not None:
             page._waiter.fail("page closed")
-        if page is self:
+        if page is self and self.connected:
             logger.warning(f"page target gone for {self.internal_uuid}")
             self.retire()
 
