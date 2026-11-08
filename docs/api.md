@@ -122,7 +122,7 @@ await page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
 | `is_visible(selector)` | First match has a bounding box. |
 | `bounding_box(selector)` | `{x, y, width, height}` of the content box in page-viewport CSS pixels. `None` when nothing matches or it has no box. |
 | `wait_for_selector(selector, visible=True, timeout=30)` | Wait for the element, visible by default. |
-| `screenshot(selector=None, full_page=False, format="png", quality=None)` | Bytes. Viewport, one element or the full page. `format`: `png`, `jpeg`, `webp`. |
+| `screenshot(selector=None, full_page=False, format="png", quality=None)` | Bytes. Viewport, one element or the full page, its whole height at the window's width. `format`: `png`, `jpeg`, `webp`. |
 
 ## Input
 

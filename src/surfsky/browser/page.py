@@ -730,8 +730,10 @@ class Page(Actions):
             params["clip"] = await self._clip(selector)
         elif full_page:
             metrics = await self.send("Page.getLayoutMetrics")
+            viewport = metrics.get("cssLayoutViewport") or metrics["layoutViewport"]
             size = metrics.get("cssContentSize") or metrics["contentSize"]
-            params["clip"] = {"x": 0, "y": 0, "scale": 1, **size}
+            width, height = viewport["clientWidth"], size["height"]
+            params["clip"] = dict(x=0, y=0, width=width, height=height, scale=1)
         shot = await self.send("Page.captureScreenshot", params)
         return base64.b64decode(shot["data"])
 

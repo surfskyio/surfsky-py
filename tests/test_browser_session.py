@@ -505,6 +505,23 @@ async def test_an_element_screenshot_clips_to_its_box_in_page_coordinates():
     assert params["clip"] == {"x": 10, "y": 3020, "width": 80, "height": 40, "scale": 1}
 
 
+async def test_a_full_page_screenshot_takes_the_window_width_and_the_page_height():
+    browser = make_browser()
+    browser._client = RecordingCDP(  # type: ignore[assignment]
+        {
+            "Page.getLayoutMetrics": {
+                "cssContentSize": {"x": 0, "y": 0, "width": 16001252, "height": 4559},
+                "cssLayoutViewport": {"pageX": 0, "pageY": 0, "clientWidth": 1425, "clientHeight": 825},
+            },
+            "Page.captureScreenshot": {"data": "aW1n"},
+        }
+    )
+    assert await browser.screenshot(full_page=True) == b"img"
+    params = dict(browser._client.calls)["Page.captureScreenshot"]
+    assert params["captureBeyondViewport"] is True
+    assert params["clip"] == {"x": 0, "y": 0, "width": 1425, "height": 4559, "scale": 1}
+
+
 async def test_type_and_fill_check_that_the_click_took_focus():
     browser = make_browser()
     focused = {"result": {"type": "boolean", "value": True}}
