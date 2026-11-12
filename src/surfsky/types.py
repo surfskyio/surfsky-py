@@ -470,6 +470,13 @@ class Extension(Model):
     updated_at: str | None = None
 
 
+class Region(Model):
+    cluster: str | None = None
+    namespace: str | None = None
+    managed: bool | None = None
+    url: str | None = None  # a dedicated API host
+
+
 class BrowserLimits(Model):
     has_browser_limits: bool | None = None
     parallel_browsers: int | None = None
@@ -542,4 +549,5 @@ __all__ = [
     "DeviceModel",
     "Extension",
     "BrowserLimits",
+    "Region",
 ]

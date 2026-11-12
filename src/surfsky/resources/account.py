@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING
 
 from ..errors import NotFoundError
 from ..transport import Spec
-from ..types import BrowserLimits
+from ..types import BrowserLimits, Region
 
 if TYPE_CHECKING:
     from ..client import AsyncSurfsky, Surfsky
@@ -13,6 +13,10 @@ DEFAULT_MAX_BROWSERS = 10
 
 def browser_limits() -> Spec[BrowserLimits]:
     return Spec("GET", "/users/browser-limits", parse=BrowserLimits.model_validate)
+
+
+def region() -> Spec[Region]:
+    return Spec("GET", "/users/region", parse=Region.model_validate)
 
 
 def env_max_browsers() -> int | None:
@@ -26,6 +30,9 @@ class Account:
 
     def browser_limits(self) -> BrowserLimits:
         return self.client.call(browser_limits())
+
+    def region(self) -> Region:
+        return self.client.call(region())
 
     def max_browsers(self) -> int:
         return (
@@ -45,6 +52,9 @@ class AsyncAccount:
 
     async def browser_limits(self) -> BrowserLimits:
         return await self.client.call(browser_limits())
+
+    async def region(self) -> Region:
+        return await self.client.call(region())
 
     async def max_browsers(self) -> int:
         if override := env_max_browsers():

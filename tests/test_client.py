@@ -82,6 +82,18 @@ def test_max_browsers_is_the_plans_cap_not_the_free_slots(
     assert client.account.max_browsers() == 25
 
 
+def test_region_is_the_accounts_cluster_and_dedicated_host(httpx_mock, client: Surfsky):
+    httpx_mock.add_response(
+        method="GET", url="https://api.test/users/region",
+        json={
+            "success": True,
+            "data": {"cluster": "de2", "namespace": "ns", "managed": True, "url": ""},
+        },
+    )
+    region = client.account.region()
+    assert (region.cluster, region.url) == ("de2", "")
+
+
 def test_max_browsers_env_override_skips_api(
     monkeypatch: pytest.MonkeyPatch, httpx_mock, client: Surfsky
 ):
