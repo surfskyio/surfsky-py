@@ -119,9 +119,9 @@ await page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
 | `all_inner_texts(selector)` | Rendered text of every match. Runs one `querySelectorAll` script in the isolated world, so it sees the light DOM only. |
 | `get_attribute(selector, name)` | `None` if missing. |
 | `count(selector)` | Number of matches. |
-| `is_visible(selector)` | First match has a bounding box. |
+| `is_visible(selector)` | Any match has a bounding box. |
 | `bounding_box(selector)` | `{x, y, width, height}` of the content box in page-viewport CSS pixels. `None` when nothing matches or it has no box. |
-| `wait_for_selector(selector, visible=True, timeout=30)` | Wait for the element, visible by default. |
+| `wait_for_selector(selector, visible=True, timeout=30)` | Wait until any match is in the document, and visible by default. |
 | `screenshot(selector=None, full_page=False, format="png", quality=None)` | Bytes. Viewport, one element or the full page, its whole height at the window's width. `format`: `png`, `jpeg`, `webp`. |
 
 ## Input

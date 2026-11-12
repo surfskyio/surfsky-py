@@ -579,16 +579,7 @@ class Page(Actions):
         }
 
     async def count(self, selector: str) -> int:
-        document = await self.send("DOM.getDocument", {"depth": 0})
-        if as_xpath(selector) is not None:
-            return len(await self._search(selector))
-        found = await self.send(
-            "DOM.querySelectorAll",
-            {"nodeId": document["root"]["nodeId"], "selector": selector},
-        )
-        if node_ids := found.get("nodeIds") or ():
-            return len(node_ids)
-        return len(await self._search(selector))
+        return len(await self._node_ids(selector))
 
     async def select_option(
         self, selector: str, value: str | None = None, *, label: str | None = None
@@ -615,15 +606,30 @@ class Page(Actions):
         # invalidates them. The poll is here for that, and for a node that does
         # not have a box yet.
         try:
-            if (node_id := await self._node_id(selector)) is None:
-                return False
-            if not visible:
-                return True
-            box = await self.send("DOM.getBoxModel", {"nodeId": node_id})
+            node_ids = await self._node_ids(selector)
         except CDPError:
             return False
-        model = box.get("model") or {}
-        return bool(model.get("width")) and bool(model.get("height"))
+        if not visible:
+            return bool(node_ids)
+        for node_id in node_ids:
+            # an element that is not rendered has no box model
+            with suppress(CDPError):
+                box = await self.send("DOM.getBoxModel", {"nodeId": node_id})
+                model = box.get("model") or {}
+                if model.get("width") and model.get("height"):
+                    return True
+        return False
+
+    async def _node_ids(self, selector: str) -> list[int]:
+        document = await self.send("DOM.getDocument", {"depth": 0})
+        if as_xpath(selector) is not None:
+            return await self._search(selector)
+        found = await self.send(
+            "DOM.querySelectorAll",
+            {"nodeId": document["root"]["nodeId"], "selector": selector},
+        )
+        # nothing in the light DOM: the same selector inside every shadow root
+        return list(found.get("nodeIds") or ()) or await self._search(selector)
 
     async def _node_id(self, selector: str) -> int | None:
         document = await self.send("DOM.getDocument", {"depth": 0})

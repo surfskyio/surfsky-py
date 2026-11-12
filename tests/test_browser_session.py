@@ -288,7 +288,7 @@ async def test_wait_for_returns_once_the_element_has_a_box():
     browser._client = RecordingCDP(  # type: ignore[assignment]
         {
             "DOM.getDocument": DOCUMENT,
-            "DOM.querySelector": {"nodeId": 2},
+            "DOM.querySelectorAll": {"nodeIds": [2]},
             "DOM.getBoxModel": {"model": {"width": 80, "height": 20}},
         }
     )
@@ -301,7 +301,7 @@ async def test_wait_for_ignores_a_box_of_no_size():
     browser._client = RecordingCDP(  # type: ignore[assignment]
         {
             "DOM.getDocument": DOCUMENT,
-            "DOM.querySelector": {"nodeId": 2},
+            "DOM.querySelectorAll": {"nodeIds": [2]},
             "DOM.getBoxModel": {"model": {"width": 0, "height": 0}},
         }
     )
@@ -312,7 +312,7 @@ async def test_wait_for_ignores_a_box_of_no_size():
 async def test_wait_for_attached_skips_the_box_lookup():
     browser = make_browser()
     browser._client = RecordingCDP(  # type: ignore[assignment]
-        {"DOM.getDocument": DOCUMENT, "DOM.querySelector": {"nodeId": 2}}
+        {"DOM.getDocument": DOCUMENT, "DOM.querySelectorAll": {"nodeIds": [2]}}
     )
     await browser.wait_for_selector("#hidden", visible=False, timeout=1)
     assert "DOM.getBoxModel" not in [m for m, _ in browser._client.calls]
@@ -326,7 +326,7 @@ async def test_wait_for_polls_through_a_document_replaced_under_it():
 
         async def send(self, method, params=None, session_id=None):
             self.calls.append((method, params or {}))
-            if method == "DOM.querySelector" and self.swaps > 0:
+            if method == "DOM.querySelectorAll" and self.swaps > 0:
                 self.swaps -= 1
                 raise CDPError("Could not find node with given id", code=-32000)
             return self.results[method]
@@ -335,20 +335,20 @@ async def test_wait_for_polls_through_a_document_replaced_under_it():
     browser._client = RacingCDP(  # type: ignore[assignment]
         {
             "DOM.getDocument": DOCUMENT,
-            "DOM.querySelector": {"nodeId": 2},
+            "DOM.querySelectorAll": {"nodeIds": [2]},
             "DOM.getBoxModel": {"model": {"width": 80, "height": 20}},
         },
         swaps=2,
     )
     await browser.wait_for_selector("#late", timeout=5)
-    queries = [m for m, _ in browser._client.calls if m == "DOM.querySelector"]
+    queries = [m for m, _ in browser._client.calls if m == "DOM.querySelectorAll"]
     assert len(queries) == 3
 
 
 async def test_wait_for_names_what_never_showed_up():
     browser = make_browser()
     browser._client = RecordingCDP(  # type: ignore[assignment]
-        {"DOM.getDocument": DOCUMENT, "DOM.querySelector": {"nodeId": 0}}
+        {"DOM.getDocument": DOCUMENT, "DOM.querySelectorAll": {"nodeIds": []}}
     )
     with pytest.raises(TimeoutError, match=r"'#nope' was not visible within 0.2s"):
         await browser.wait_for_selector("#nope", timeout=0.2)
@@ -357,9 +357,37 @@ async def test_wait_for_names_what_never_showed_up():
 async def test_is_visible_answers_without_waiting():
     browser = make_browser()
     browser._client = RecordingCDP(  # type: ignore[assignment]
-        {"DOM.getDocument": DOCUMENT, "DOM.querySelector": {"nodeId": 0}}
+        {"DOM.getDocument": DOCUMENT, "DOM.querySelectorAll": {"nodeIds": []}}
     )
     assert await browser.is_visible("#nope") is False
+
+
+class OneVisibleCDP(RecordingCDP):
+    def __init__(self, light_dom: list[int]) -> None:
+        super().__init__({
+            "DOM.querySelectorAll": {"nodeIds": light_dom},
+            "DOM.performSearch": {"searchId": "s", "resultCount": 3},
+            "DOM.getSearchResults": {"nodeIds": [10, 20, 30]},
+            "Runtime.callFunctionOn": {"result": {"value": True}},
+            "DOM.getBoxModel": {"model": {"width": 80, "height": 20}},
+        })
+
+    async def send(self, method, params=None, session_id=None):
+        if method == "DOM.getBoxModel" and params["nodeId"] != 30:
+            raise CDPError("Could not compute box model.", code=-32000)
+        return await super().send(method, params, session_id)
+
+
+@pytest.mark.parametrize(
+    ("selector", "light_dom"),
+    [("li", [10, 20, 30]), ("//li", []), ("li", [])],
+    ids=["css", "xpath", "shadow root"],
+)
+async def test_wait_for_passes_on_any_visible_match(selector, light_dom):
+    browser = make_browser()
+    browser._client = OneVisibleCDP(light_dom)  # type: ignore[assignment]
+    await browser.wait_for_selector(selector, timeout=0.5)
+    assert await browser.is_visible(selector)
 
 
 async def test_html_returns_one_element_and_none_for_a_miss():
