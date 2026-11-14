@@ -320,6 +320,7 @@ class Browser(Page):
             self._drop(page)
 
     def _on_crashed(self, page: Page, event: dict[str, Any]) -> None:
+        page._crashed = True
         self._drop(page)
 
     def _drop(self, page: Page) -> None:

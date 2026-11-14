@@ -172,6 +172,7 @@ class Page(Actions):
         self._session_id = session_id
         self._frame_id = ""
         self._closed = False
+        self._crashed = False
         self.on_dialog: DialogHandler | None = None
         self._loader_id: str | None = None  # the main frame's newest document
         self._milestones: set[str] = set()  # the lifecycle events it reached
@@ -209,7 +210,9 @@ class Page(Actions):
 
     def _require_open(self) -> None:
         if self._closed:
-            raise PageClosedError("page is closed")
+            raise PageClosedError(
+                "the page crashed" if self._crashed else "page is closed"
+            )
 
     async def _send(
         self,

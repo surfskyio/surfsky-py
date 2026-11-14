@@ -409,6 +409,8 @@ async def test_a_crashed_popup_counts_as_closed(cdp):
         popup = browser.pages[-1]
         cdp.handlers["Inspector.targetCrashed"]({}, "S2")
         assert popup.closed
+        with pytest.raises(RuntimeError, match="the page crashed"):
+            await popup.send("Page.reload")
         assert browser.pages == [browser]
 
 
