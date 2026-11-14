@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 from ..errors import BrowserTimeoutError, PageClosedError
-from ..types import Cookie, WaitUntil
+from ..types import ChallengeResult, Cookie, WaitUntil
 from .actions import Actions
 from .cdp import CDPClient, CDPError
 
@@ -31,6 +31,10 @@ LIFECYCLE_EVENT = {
 WORLD_NAME = "utility"
 
 DIALOG_DELAY = (0.6, 1.4)
+
+CHALLENGE_TIMEOUT = 45.0
+# seconds the reply may take past that deadline
+CHALLENGE_REPLY_MARGIN = 10.0
 
 FUNCTION = re.compile(r"^\s*(async\s+)?(function\b|\([^()]*\)\s*=>|[\w$]+\s*=>)")
 
@@ -207,8 +211,17 @@ class Page(Actions):
         if self._closed:
             raise PageClosedError("page is closed")
 
-    async def _send(self, method: str, params: dict[str, Any] | None = None) -> Any:
-        async with deadline(self._browser.command_timeout, f"{method} did not answer"):
+    async def _send(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> Any:
+        limit = self._browser.command_timeout
+        if limit is not None and timeout is not None:
+            limit = max(limit, timeout)
+        async with deadline(limit, f"{method} did not answer"):
             try:
                 return await self.cdp.send(method, params, session_id=self._session_id)
             except CDPError as exc:
@@ -261,6 +274,26 @@ class Page(Actions):
 
     async def bring_to_front(self) -> None:
         await self.send("Page.bringToFront")
+
+    async def pass_challenge(
+        self, *, timeout: float | None = None, solve: bool = True
+    ) -> ChallengeResult:
+        params: dict[str, Any] = {"challengeOnly": True, "solve": solve}
+        if timeout is not None:
+            params["timeout"] = round(timeout * 1000)
+        self._require_open()
+        await self._wait_ready()
+        reply = await self._send(
+            "Captcha.solve",
+            params,
+            timeout=(timeout or CHALLENGE_TIMEOUT) + CHALLENGE_REPLY_MARGIN,
+        )
+        return ChallengeResult(
+            status=reply["challenge"],
+            antibot=reply.get("antibot"),
+            reason=reply.get("reason"),
+            cost_usd=(reply.get("usage") or {}).get("cost_usd"),
+        )
 
     async def wait_for_load_state(
         self, state: WaitUntil = "load", *, timeout: float = 30.0

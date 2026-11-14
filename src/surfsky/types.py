@@ -367,6 +367,15 @@ class ScrapeChallenge(Model):
     cost: str
 
 
+class ChallengeResult(Model):
+    status: Literal["none", "passed", "solved", "not_solved", "blocked"] | str
+    antibot: str | None = None
+    reason: (
+        Literal["timeout", "no_solver", "solve_failed", "load_timeout"] | str | None
+    ) = None
+    cost_usd: float | None = None
+
+
 class ScrapeResult(Model):
     url: str | None = None
     final_url: str | None = None
@@ -534,6 +543,7 @@ __all__ = [
     "Cookie",
     "ScrapeMetadata",
     "ScrapeChallenge",
+    "ChallengeResult",
     "ScrapeResult",
     "BatchDeleteResult",
     "StopAllResult",

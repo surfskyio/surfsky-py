@@ -69,6 +69,11 @@ seconds. Input goes through Surfsky's
 [human emulation](https://docs.surfsky.io/human_emulation), and scripts run in
 an isolated world unless you pass `isolated=False`.
 
+`await browser.pass_challenge()` gets the page past an anti-bot challenge page
+and returns a `ChallengeResult`: `status` is `none`, `passed`, `solved`,
+`not_solved` or `blocked`, with `antibot`, `reason` and `cost_usd`. `solve=False`
+only waits for a challenge that passes by itself.
+
 ## Playwright and other CDP clients
 
 `client.session()` starts a session without connecting to it. `connect_url` is

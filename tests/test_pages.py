@@ -29,6 +29,7 @@ class AttachingCDP(PostsViaSend):
         self.connected = True
         self.delay: dict[str, float] = {}  # method -> seconds before it answers
         self.rejected: dict[str, str] = {}  # method -> session it fails on
+        self.replies: dict[str, dict | Exception] = {}  # method -> its answer
         self.loads = True  # whether a navigation reaches load on its own
         self.during_dispose: list[dict] = []  # pages another client opens meanwhile
         self._sessions = 0
@@ -69,6 +70,10 @@ class AttachingCDP(PostsViaSend):
             await asyncio.sleep(seconds)
         if method in self.rejected and self.rejected[method] == session_id:
             raise RuntimeError(f"{method} rejected")
+        if (reply := self.replies.get(method)) is not None:
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
         match method:
             case "Target.setAutoAttach":
                 for info in self.targets:
@@ -608,3 +613,53 @@ async def test_a_wait_on_a_page_the_site_closes_ends_at_once(cdp):
         cdp.detach(session, "P")
         with pytest.raises(PageClosedError):
             await wait
+
+
+async def test_pass_challenge_sends_one_command_and_maps_the_reply(cdp):
+    async with make_browser() as browser:
+        cdp.replies["Captcha.solve"] = {
+            "status": "success", "type": "turnstile", "usage": {"cost_usd": 0.002},
+            "challenge": "solved", "antibot": "cloudflare", "reason": None,
+        }
+        result = await browser.pass_challenge(timeout=20, solve=False)
+        assert cdp.sent("Captcha.solve") == [
+            ({"challengeOnly": True, "solve": False, "timeout": 20_000}, "S1")
+        ]
+        assert (result.status, result.antibot, result.reason, result.cost_usd) == (
+            "solved", "cloudflare", None, 0.002,
+        )
+
+
+@pytest.mark.parametrize(
+    ("reply", "expected"),
+    [
+        ({"challenge": "none", "antibot": None, "reason": None}, ("none", None, None)),
+        ({"challenge": "passed", "antibot": "datadome", "reason": None}, ("passed", "datadome", None)),
+        (
+            {"challenge": "not_solved", "antibot": "cloudflare", "reason": "no_solver"},
+            ("not_solved", "cloudflare", "no_solver"),
+        ),
+        ({"challenge": "blocked", "antibot": "akamai", "reason": None}, ("blocked", "akamai", None)),
+    ],
+)
+async def test_pass_challenge_maps_every_status(cdp, reply, expected):
+    async with make_browser() as browser:
+        cdp.replies["Captcha.solve"] = reply
+        result = await browser.pass_challenge()
+        assert cdp.sent("Captcha.solve") == [({"challengeOnly": True, "solve": True}, "S1")]
+        assert (result.status, result.antibot, result.reason) == expected
+        assert result.cost_usd is None
+
+
+async def test_pass_challenge_keeps_any_other_command_error(cdp):
+    async with make_browser() as browser:
+        cdp.replies["Captcha.solve"] = CDPError("Captcha solving failed", code=-32000)
+        with pytest.raises(CDPError, match="Captcha.solve: Captcha solving failed"):
+            await browser.pass_challenge()
+
+
+async def test_pass_challenge_outlasts_the_command_timeout(cdp):
+    async with make_browser(command_timeout=0.05) as browser:
+        cdp.replies["Captcha.solve"] = {"challenge": "passed", "antibot": None, "reason": None}
+        cdp.delay["Captcha.solve"] = 0.2
+        assert (await browser.pass_challenge(timeout=1)).status == "passed"
