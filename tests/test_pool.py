@@ -13,7 +13,11 @@ from surfsky.types import Session
 class Quiet:
     connected = True
 
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
     async def send(self, method, params=None, session_id=None):
+        self.calls.append(method)
         return {}
 
 
@@ -761,6 +765,10 @@ async def test_release_forgets_captures_and_the_dialog_handler(monkeypatch):
         assert browser.responses == []
         assert browser.on_dialog is None
         assert not browser.should_recycle
+        assert "Network.disable" in browser._client.calls  # type: ignore[attr-defined]
+        async with pool.lease() as browser:
+            with pytest.raises(RuntimeError, match="capture_responses"):
+                await browser.wait_for_response("/api/")
 
 
 def test_the_pool_refuses_a_bare_string_of_url_patterns():

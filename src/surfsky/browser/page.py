@@ -41,15 +41,18 @@ FUNCTION = re.compile(r"^\s*(async\s+)?(function\b|\([^()]*\)\s*=>|[\w$]+\s*=>)"
 # what Chrome answers once the isolated world is gone
 WORLD_GONE = ("Cannot find context", "does not belong to the document")
 
-SELECT = """function (value, label) {
-  const option = Array.from(this.options).find(
-    o => label === null ? o.value === value : o.label === label || o.text === label
-  );
-  if (!option) return false;
-  this.value = option.value;
-  this.dispatchEvent(new Event("input", {bubbles: true}));
-  this.dispatchEvent(new Event("change", {bubbles: true}));
-  return option.value;
+SELECT_STATE = """function () {
+  const box = e => {
+    const r = e.getBoundingClientRect();
+    return {x: r.x, y: r.y, width: r.width, height: r.height};
+  };
+  const listbox = this.multiple || this.size > 1;
+  const options = Array.from(this.options, o => ({
+    value: o.value, label: o.label, text: o.text, selected: o.selected,
+    disabled: o.matches(":disabled"), hidden: getComputedStyle(o).display === "none",
+    box: listbox ? box(o) : null,
+  }));
+  return {listbox, box: box(this), viewport: innerHeight, options};
 }"""
 
 INNER_TEXT = "function () { return this.innerText }"
@@ -57,6 +60,8 @@ INNER_TEXT = "function () { return this.innerText }"
 MATCHES = "function (s) { return this.nodeType === 1 && (s == null || this.matches(s)) }"
 
 IS_FOCUSED = "function () { return this.getRootNode().activeElement === this }"
+
+RESPONSE_STATUS = 'performance.getEntriesByType("navigation")[0]?.responseStatus'
 
 DialogHandler = Callable[[str, str], bool | str | None]
 
@@ -181,7 +186,6 @@ class Page(Actions):
         self._ready.set()
         self._setup_error: Exception | None = None
         self._waiter: NavWaiter | None = None
-        self._status: int | None = None
         self._storage_ready = False
         self._captures: list[str] = []
         self._responses: list[CapturedResponse] = []
@@ -198,10 +202,6 @@ class Page(Actions):
     @property
     def closed(self) -> bool:
         return self._closed
-
-    @property
-    def status(self) -> int | None:
-        return self._status
 
     async def send(self, method: str, params: dict[str, Any] | None = None) -> Any:
         self._require_open()
@@ -246,7 +246,6 @@ class Page(Actions):
         commands: list[tuple[str, dict[str, Any] | None]] = [
             ("Page.enable", None),
             ("Page.setLifecycleEventsEnabled", {"enabled": True}),
-            ("Network.enable", None),
         ]
         if patterns := self._browser._fetch_patterns:
             commands.append(("Fetch.enable", {"patterns": patterns}))
@@ -313,7 +312,6 @@ class Page(Actions):
         if self._waiter is not None:
             raise RuntimeError("navigation already in progress")
         self._waiter = waiter = NavWaiter(LIFECYCLE_EVENT[wait_until])
-        self._status = None  # a failed navigation must not keep the last one's
         try:
             async with deadline(
                 timeout, f"navigation to {url} did not reach {wait_until!r}"
@@ -338,7 +336,6 @@ class Page(Actions):
         if self._waiter is not None:
             raise RuntimeError("navigation already in progress")
         self._waiter = waiter = NavWaiter(LIFECYCLE_EVENT[wait_until])
-        self._status = None
         try:
             async with deadline(timeout, f"reload did not reach {wait_until!r}"):
                 await self.send("Page.reload")
@@ -379,12 +376,18 @@ class Page(Actions):
         if not fragments:
             raise ValueError("capture_responses needs at least one URL fragment")
         self._require_open()
+        enable = not self._captures
         self._captures.extend(fragments)
+        if enable:
+            await self.send("Network.enable")
 
     async def stop_capturing(self) -> None:
+        capturing = bool(self._captures)
         self._captures.clear()
         self._responses = []
         self._in_flight.clear()
+        if capturing and not self._closed:
+            await self.send("Network.disable")
 
     async def wait_for_response(
         self, fragment: str, *, timeout: float = 30.0
@@ -401,8 +404,6 @@ class Page(Actions):
 
     def _on_response(self, event: dict[str, Any]) -> None:
         response = event.get("response") or {}
-        if event.get("type") == "Document" and event.get("frameId") == self._frame_id:
-            self._status = response.get("status")
         url = response.get("url", "")
         if any(fragment in url for fragment in self._captures):
             self._in_flight[event["requestId"]] = response
@@ -624,10 +625,78 @@ class Page(Actions):
             raise ValueError("select_option takes either a value or a label")
         if (node_id := await self._node_id(selector)) is None:
             raise ValueError(f"nothing matches {selector!r}")
-        picked = await self._call(node_id, SELECT, value, label)
-        if picked is False:
-            raise ValueError(f"{selector!r} has no option {label or value!r}")
-        return picked
+        wanted = label or value
+        state = await self._call(node_id, SELECT_STATE)
+        options = state["options"]
+        hits = [
+            o["value"] == value if label is None else label in (o["label"], o["text"])
+            for o in options
+        ]
+        if True not in hits:
+            raise ValueError(f"{selector!r} has no option {wanted!r}")
+        index = hits.index(True)
+        option = options[index]
+        if option["disabled"] or option["hidden"]:
+            raise ValueError(f"{selector!r} option {wanted!r} is disabled or hidden")
+        if [o["value"] for o in options if o["selected"]] == [option["value"]]:
+            return option["value"]
+        loader_id = self._loader_id
+        for _ in range(3):
+            box, row = state["box"], state["options"][index]["box"]
+            top, bottom = box["y"], box["y"] + box["height"]
+            middle = (top + bottom) / 2
+            if top < 0 or bottom > state["viewport"]:
+                await self.scroll(delta_y=middle - state["viewport"] / 2)
+            elif row and (row["y"] < top or row["y"] + row["height"] > bottom):
+                await self.mouse.move(box["x"] + box["width"] / 2, middle)
+                await self.scroll(delta_y=row["y"] + row["height"] / 2 - middle)
+            else:
+                break
+            state = await self._call(node_id, SELECT_STATE)
+        box = state["options"][index]["box"] or state["box"]
+        if not box["width"] or not box["height"]:
+            raise ValueError(f"{selector!r} is not visible")
+        await self.mouse.click(
+            box["x"] + box["width"] * random.uniform(0.3, 0.7),
+            box["y"] + box["height"] * random.uniform(0.3, 0.7),
+        )
+        if not state["listbox"]:
+            if not await self._call(node_id, IS_FOCUSED):
+                raise ValueError(f"{selector!r} did not take focus")
+            at = next((i for i, o in enumerate(options) if o["selected"]), -1)
+            shown = [
+                i for i, o in enumerate(options) if not (o["disabled"] or o["hidden"])
+            ]
+            down = sum(at < i <= index for i in shown)
+            up = sum(index <= i < at for i in shown)
+            name = option["label"].lstrip().lower()
+            others = [o["label"].lstrip().lower() for o in options if not o["disabled"]]
+            others.remove(name)
+            prefix = next(
+                (
+                    name[:n]
+                    for n in range(1, len(name) + 1)
+                    if (n == 1 or len(set(name[:n])) > 1)
+                    and not any(other.startswith(name[:n]) for other in others)
+                ),
+                None,
+            )
+            if prefix and down + up > 3:
+                for char in prefix:
+                    await self.keyboard.press("Space" if char == " " else char)
+            else:
+                for _ in range(down + up):
+                    await self.keyboard.press("ArrowDown" if down else "ArrowUp")
+            await self.keyboard.press("Enter")
+        try:
+            state = await self._call(node_id, SELECT_STATE)
+        except CDPError:
+            if self._loader_id == loader_id:
+                raise
+            return option["value"]
+        if [o["value"] for o in state["options"] if o["selected"]] != [option["value"]]:
+            raise ValueError(f"{selector!r} did not select {wanted!r}")
+        return option["value"]
 
     async def wait_for_selector(
         self, selector: str, *, visible: bool = True, timeout: float = 30.0
@@ -638,9 +707,6 @@ class Page(Actions):
                 await asyncio.sleep(POLL_INTERVAL)
 
     async def _matches(self, selector: str, visible: bool) -> bool:
-        # Node ids belong to one document, so a navigation between the lookups
-        # invalidates them. The poll is here for that, and for a node that does
-        # not have a box yet.
         try:
             node_ids = await self._node_ids(selector)
         except CDPError:
@@ -648,7 +714,6 @@ class Page(Actions):
         if not visible:
             return bool(node_ids)
         for node_id in node_ids:
-            # an element that is not rendered has no box model
             with suppress(CDPError):
                 box = await self.send("DOM.getBoxModel", {"nodeId": node_id})
                 model = box.get("model") or {}
@@ -664,7 +729,6 @@ class Page(Actions):
             "DOM.querySelectorAll",
             {"nodeId": document["root"]["nodeId"], "selector": selector},
         )
-        # nothing in the light DOM: the same selector inside every shadow root
         return list(found.get("nodeIds") or ()) or await self._search(selector)
 
     async def _node_id(self, selector: str) -> int | None:
@@ -678,7 +742,6 @@ class Page(Actions):
         )
         if node_id := found.get("nodeId"):
             return node_id
-        # nothing in the light DOM: the same selector inside every shadow root
         pierced = await self._search(selector)
         return pierced[0] if pierced else None
 
@@ -748,6 +811,9 @@ class Page(Actions):
     async def title(self) -> str:
         info = await self.send("Target.getTargetInfo", {"targetId": self._target_id})
         return info["targetInfo"]["title"]
+
+    async def status(self) -> int | None:
+        return await self.evaluate(RESPONSE_STATUS) or None
 
     async def url(self) -> str:
         info = await self.send("Target.getTargetInfo", {"targetId": self._target_id})

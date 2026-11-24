@@ -14,7 +14,7 @@ from surfsky import AsyncSurfsky
 async def main() -> None:
     async with AsyncSurfsky() as client, client.browser() as browser:
         await browser.goto("https://example.com", wait_until="domcontentloaded")
-        print("status :", browser.status)
+        print("status :", await browser.status())
         print("title  :", await browser.title())
         print(await browser.content())
 

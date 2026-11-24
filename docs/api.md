@@ -89,7 +89,7 @@ waits for one of its own and raises `RateLimitError` only if it has none.
 | `go_back(timeout=30)`, `go_forward(timeout=30)` | Returns the new URL, `None` at the end of history. |
 | `wait_for_load_state(state="load", timeout=30)` | Wait for the current document to reach `state`. |
 | `wait_for_url(fragment, timeout=30)` | Wait until the URL contains `fragment`. Returns the URL. |
-| `status` | HTTP status of the current document. Set even when `goto` raises. |
+| `status()` | HTTP status of the current document after redirects. `None` for `about:blank` or a failed `goto`. |
 
 ## Reading
 
@@ -137,7 +137,7 @@ and `hover` also take `wait_for_visible`, `scroll_into_view`, `pre_delay`,
 | `hover(selector)` | Move the mouse over it. |
 | `type(selector, text)` | Click, then type after the existing text. |
 | `fill(selector, text)` | Select the existing text, then type over it. |
-| `select_option(selector, value=None, label=None)` | Pick an `<option>` by value or label. Returns the value. |
+| `select_option(selector, value=None, label=None)` | Pick an `<option>` by value or label with real clicks and keys. Returns the value. Raises `ValueError` if the option or the select can't be picked. |
 | `scroll(delta_x=None, delta_y=None, duration=None)` | Animated scroll. |
 | `scroll_into_view(selector, behavior=None)`, `scroll_to(x=None, y=None, behavior=None)` | `behavior`: `smooth`, `instant`. |
 | `keyboard.type(text)`, `keyboard.press(key, modifiers=None, delay=None)` | Keys to the focused element. `press("Enter")` doesn't submit forms, click the button. |
@@ -166,10 +166,10 @@ and `hover` also take `wait_for_visible`, `scroll_into_view`, `pre_delay`,
 
 | Method | Description |
 | --- | --- |
-| `capture_responses(*fragments)` | Record responses whose URL contains a fragment. Call before navigating. |
+| `capture_responses(*fragments)` | Record responses whose URL contains a fragment. Call before navigating. Turns on the CDP Network domain for this page until `stop_capturing()`. |
 | `wait_for_response(fragment, timeout=30)` | First captured match. `CapturedResponse`: `url`, `status`, `headers`, `body`, `text`, `json()`. |
 | `responses` | Everything captured, oldest first. |
-| `stop_capturing()` | Drop captures, stop recording. |
+| `stop_capturing()` | Drop captures, stop recording, turn the Network domain off. |
 
 ## Dialogs
 

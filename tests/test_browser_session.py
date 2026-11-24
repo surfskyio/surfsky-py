@@ -134,7 +134,6 @@ async def test_goto_navigation_error_is_a_cdp_error():
     browser = _goto_browser({"errorText": "net::ERR_NAME_NOT_RESOLVED"})
     with pytest.raises(CDPError, match="ERR_NAME_NOT_RESOLVED"):
         await browser.goto("https://nope.test", timeout=1)
-    assert browser.status is None
 
 
 def test_blocking_the_document_is_refused():
@@ -871,41 +870,6 @@ async def test_connect_enables_fetch_with_resource_type_patterns(fake_cdp):
     }
 
 
-async def test_a_page_with_nothing_to_block_arms_network_and_not_fetch(fake_cdp):
-    browser = make_browser()
-    await browser.connect()
-    assert "Network.enable" in fake_cdp.calls
-    assert "Fetch.enable" not in fake_cdp.calls
-
-
-async def test_the_document_response_reports_its_status(fake_cdp):
-    browser = make_browser(block_resources={"image"})
-    await browser.connect()
-
-    fake_cdp.document_response("S", "R1", 404)
-    assert browser.status == 404
-
-    running = set(browser._pending)  # the keepalive loop, which never finishes
-    fake_cdp.handlers["Fetch.requestPaused"]({"requestId": "R2"}, "S")  # a blocked image
-    await asyncio.gather(*(set(browser._pending) - running))
-    assert "Fetch.failRequest" in fake_cdp.calls
-
-
-async def test_an_iframe_document_does_not_set_the_page_status(fake_cdp):
-    async with make_browser() as browser:
-        fake_cdp.document_response("S", "R1", 200)
-        fake_cdp.document_response("S", "R2", 404, frame_id="child")
-        assert browser.status == 200
-
-
-async def test_a_subresource_does_not_set_the_page_status(fake_cdp):
-    async with make_browser() as browser:
-        fake_cdp.handlers["Network.responseReceived"](
-            {"requestId": "R1", "type": "XHR", "frameId": "T", "response": {"status": 500}}, "S"
-        )
-        assert browser.status is None
-
-
 class ReplayingCDP(FakeConnectCDP):
     async def send(self, method, params=None, session_id=None):
         if method == "Page.setLifecycleEventsEnabled":
@@ -1322,36 +1286,245 @@ async def test_count_counts_matches_without_running_script():
     assert await browser.count("li") == 3
 
 
-async def test_select_sets_the_option_and_fires_change():
+SELECT_BOX = {"x": 10, "y": 100, "width": 120, "height": 20}
+
+
+def select_state(*labels, selected=(), disabled=(), hidden=(), boxes=None, box=SELECT_BOX):
+    options = [
+        {
+            "value": label.lower(), "label": label, "text": label,
+            "selected": label in selected, "disabled": label in disabled,
+            "hidden": label in hidden, "box": boxes[i] if boxes else None,
+        }
+        for i, label in enumerate(labels)
+    ]
+    return {"listbox": boxes is not None, "box": box, "viewport": 800, "options": options}
+
+
+class SelectCDP(RecordingCDP):
+    def __init__(self, *states) -> None:
+        super().__init__({
+            "Human.click": {}, "Human.press": {}, "Human.type": {},
+            "Human.moveTo": {}, "Human.scroll": {},
+        })
+        self.states = list(states)
+
+    async def send(self, method, params=None, session_id=None):
+        if method != "Runtime.callFunctionOn":
+            return await super().send(method, params, session_id)
+        self.calls.append((method, params))
+        if "listbox" not in params["functionDeclaration"]:
+            return {"result": {"value": True}}
+        state = self.states.pop(0)
+        return {"result": {"value": state() if callable(state) else state}}
+
+    def human(self) -> list[tuple[str, dict]]:
+        return [(m, p) for m, p in self.calls if m.startswith("Human.")]
+
+
+def inside(click: tuple[str, dict], box: dict) -> bool:
+    x, y = click[1]["x"], click[1]["y"]
+    return box["x"] <= x <= box["x"] + box["width"] and box["y"] <= y <= box["y"] + box["height"]
+
+
+FRUIT = ("Choose", "Apple", "Banana", "Cherry")
+
+
+@pytest.mark.parametrize(
+    ("current", "key"), [("Choose", "ArrowDown"), ("Cherry", "ArrowUp")]
+)
+async def test_select_opens_the_menu_and_arrows_to_a_near_option(current, key):
+    goal = "Apple" if current == "Cherry" else "Banana"
     browser = make_browser()
-    browser._client = RecordingCDP({  # type: ignore[assignment]
-        "Runtime.callFunctionOn": {"result": {"value": "eu"}},
-    })
-    await browser.select_option("#region", "eu")
-    [params] = browser._client.sent("Runtime.callFunctionOn")
-    assert "change" in params["functionDeclaration"]
-    assert params["arguments"] == [{"value": "eu"}, {"value": None}]
+    browser._client = SelectCDP(  # type: ignore[assignment]
+        select_state(*FRUIT, selected=(current,)), select_state(*FRUIT, selected=(goal,))
+    )
+    assert await browser.select_option("#fruit", goal.lower()) == goal.lower()
+    click, *keys = browser._client.human()
+    assert click[0] == "Human.click" and inside(click, SELECT_BOX)
+    assert keys == [
+        ("Human.press", {"key": key}),
+        ("Human.press", {"key": key}),
+        ("Human.press", {"key": "Enter"}),
+    ]
+
+
+async def test_select_returns_an_option_already_chosen():
+    browser = make_browser()
+    browser._client = SelectCDP(select_state(*FRUIT, selected=("Apple",)))  # type: ignore[assignment]
+    assert await browser.select_option("#fruit", label="Apple") == "apple"
+
+
+async def test_select_complains_when_the_page_did_not_take_the_choice():
+    browser = make_browser()
+    browser._client = SelectCDP(  # type: ignore[assignment]
+        select_state(*FRUIT, selected=("Choose",)), select_state(*FRUIT, selected=("Choose",))
+    )
+    with pytest.raises(ValueError, match="'#fruit' did not select 'apple'"):
+        await browser.select_option("#fruit", "apple")
+
+
+async def test_select_returns_when_the_change_loads_another_document():
+    browser = make_browser()
+
+    def navigated():
+        browser._on_lifecycle({"name": "init", "frameId": "", "loaderId": "next"})
+        raise CDPError("No node with given id found")
+
+    browser._client = SelectCDP(  # type: ignore[assignment]
+        select_state(*FRUIT, selected=("Choose",)), navigated
+    )
+    assert await browser.select_option("#fruit", "apple") == "apple"
+
+
+async def test_select_raises_a_lookup_error_when_the_document_stayed():
+    browser = make_browser()
+
+    def lost():
+        raise CDPError("No node with given id found")
+
+    browser._client = SelectCDP(  # type: ignore[assignment]
+        select_state(*FRUIT, selected=("Choose",)), lost
+    )
+    with pytest.raises(CDPError, match="No node with given id found"):
+        await browser.select_option("#fruit", "apple")
+
+
+async def test_select_refuses_an_option_a_person_cannot_choose():
+    browser = make_browser()
+    browser._client = SelectCDP(  # type: ignore[assignment]
+        select_state(*FRUIT, selected=("Choose",), disabled=("Apple",))
+    )
+    with pytest.raises(ValueError, match="'Apple' is disabled or hidden"):
+        await browser.select_option("#fruit", label="Apple")
+
+
+async def test_select_refuses_a_select_drawn_over_by_a_custom_widget():
+    browser = make_browser()
+    hidden = {"x": 0, "y": 0, "width": 0, "height": 0}
+    browser._client = SelectCDP(  # type: ignore[assignment]
+        select_state(*FRUIT, selected=("Choose",), box=hidden)
+    )
+    with pytest.raises(ValueError, match="'#fruit' is not visible"):
+        await browser.select_option("#fruit", label="Apple")
+
+
+COUNTRIES = (
+    "Choose", "Laos", "Latvia", "Lebanon", "Liberia", "Libya", "Llandudno", "Dominica",
+    "Dominican Republic", "Denmark", "United Arab Emirates", "United Kingdom", "United States",
+)
+
+
+@pytest.mark.parametrize(
+    ("label", "typed", "disabled"),
+    [
+        ("United Kingdom", "united k", ()),
+        ("Llandudno", "lla", ()),
+        ("Dominican Republic", "do", ("Dominica",)),
+    ],
+)
+async def test_select_types_ahead_to_a_far_option(label, typed, disabled):
+    browser = make_browser()
+    browser._client = SelectCDP(  # type: ignore[assignment]
+        select_state(*COUNTRIES, selected=("Choose",), disabled=disabled),
+        select_state(*COUNTRIES, selected=(label,)),
+    )
+    assert await browser.select_option("#country", label=label) == label.lower()
+    keys = ["Space" if char == " " else char for char in typed]
+    assert browser._client.human()[1:] == [
+        *[("Human.press", {"key": key}) for key in keys], ("Human.press", {"key": "Enter"}),
+    ]
+
+
+async def test_select_arrows_past_options_a_person_cannot_choose():
+    browser = make_browser()
+    browser._client = SelectCDP(  # type: ignore[assignment]
+        select_state(*COUNTRIES, selected=("Choose",), disabled=("Latvia",), hidden=("Liberia",)),
+        select_state(*COUNTRIES, selected=("Dominica",)),
+    )
+    assert await browser.select_option("#country", label="Dominica") == "dominica"
+    assert browser._client.human()[1:] == [
+        *[("Human.press", {"key": "ArrowDown"})] * 5, ("Human.press", {"key": "Enter"}),
+    ]
+
+
+def rows(*labels, scrolled=0) -> list[dict]:
+    """Option boxes of a listbox showing 3 rows of 20px from y=100"""
+    return [
+        {"x": 10, "y": 100 + 20 * i - scrolled, "width": 120, "height": 20}
+        for i in range(len(labels))
+    ]
+
+
+LISTBOX = {"x": 10, "y": 100, "width": 120, "height": 60}
+
+
+async def test_a_listbox_option_in_view_is_clicked():
+    tags = ("Red", "Green", "Blue")
+    browser = make_browser()
+    browser._client = SelectCDP(  # type: ignore[assignment]
+        select_state(*tags, selected=("Red", "Blue"), boxes=rows(*tags), box=LISTBOX),
+        select_state(*tags, selected=("Green",), boxes=rows(*tags), box=LISTBOX),
+    )
+    assert await browser.select_option("#tags", "green") == "green"
+    [click] = browser._client.human()
+    assert click[0] == "Human.click" and inside(click, rows(*tags)[1])
+
+
+async def test_a_listbox_is_scrolled_to_an_option_out_of_view():
+    tags = ("Red", "Green", "Blue", "Cyan", "Pink")
+    browser = make_browser()
+    hidden_rows, scrolled_rows = rows(*tags), rows(*tags, scrolled=40)
+    browser._client = SelectCDP(  # type: ignore[assignment]
+        select_state(*tags, boxes=hidden_rows, box=LISTBOX),
+        select_state(*tags, boxes=scrolled_rows, box=LISTBOX),
+        select_state(*tags, selected=("Pink",), boxes=scrolled_rows, box=LISTBOX),
+    )
+    assert await browser.select_option("#tags", "pink") == "pink"
+    move, scroll, click = browser._client.human()
+    assert move[0] == "Human.moveTo" and inside(move, LISTBOX)
+    assert scroll == ("Human.scroll", {"deltaY": 60})
+    assert click[0] == "Human.click" and inside(click, scrolled_rows[4])
+
+
+async def test_the_page_is_scrolled_to_a_select_below_the_fold():
+    sizes = ("S", "M")
+    below = {**SELECT_BOX, "y": 1700}
+    browser = make_browser()
+    browser._client = SelectCDP(  # type: ignore[assignment]
+        select_state(*sizes, selected=("S",), box=below),
+        select_state(*sizes, selected=("S",)),
+        select_state(*sizes, selected=("M",)),
+    )
+    assert await browser.select_option("#size", "m") == "m"
+    scroll, click, *_ = browser._client.human()
+    assert scroll == ("Human.scroll", {"deltaY": 1310})
+    assert click[0] == "Human.click" and inside(click, SELECT_BOX)
 
 
 async def test_select_takes_an_xpath_selector():
+    regions = ("Asia", "Europe")
     browser = make_browser()
-    browser._client = RecordingCDP({  # type: ignore[assignment]
+    browser._client = SelectCDP(  # type: ignore[assignment]
+        select_state(*regions, selected=("Asia",)), select_state(*regions, selected=("Europe",))
+    )
+    browser._client.results.update({
         "DOM.performSearch": {"searchId": "s", "resultCount": 1},
         "DOM.getSearchResults": {"nodeIds": [9]},
-        "Runtime.callFunctionOn": {"result": {"value": "eu"}},
     })
-    assert await browser.select_option("//select[@id='region']", "eu") == "eu"
+    assert await browser.select_option("//select[@id='region']", "europe") == "europe"
     assert browser._client.sent("DOM.resolveNode")[-1] == {
         "nodeId": 9,
         "executionContextId": 7,
     }
+    assert browser._client.human()[1:] == [
+        ("Human.press", {"key": "ArrowDown"}), ("Human.press", {"key": "Enter"}),
+    ]
 
 
 async def test_select_by_label_and_a_missing_option_complain():
     browser = make_browser()
-    browser._client = RecordingCDP({  # type: ignore[assignment]
-        "Runtime.callFunctionOn": {"result": {"value": False}},
-    })
+    browser._client = SelectCDP(select_state("Asia"))  # type: ignore[assignment]
     with pytest.raises(ValueError, match="no option"):
         await browser.select_option("#region", label="Europe")
     with pytest.raises(ValueError, match="either"):
@@ -1414,9 +1587,27 @@ async def test_stop_capturing_forgets_the_fragments_and_the_answers(fake_cdp):
     browser._responses.append(CapturedResponse(url="https://a.test/api/x", status=200))
     await browser.stop_capturing()
     assert browser.responses == []
-    assert "Network.disable" not in fake_cdp.calls  # the domain stays on for status
+    assert "Network.disable" in fake_cdp.calls
     with pytest.raises(RuntimeError, match="capture_responses"):
         await browser.wait_for_response("/api/")
+
+
+@both_ways
+async def test_a_capture_cancelled_during_its_enable_is_still_stopped(monkeypatch, the_anyio_way):
+    class SlowEnableCDP(FakeConnectCDP):
+        async def send(self, method, params=None, session_id=None):
+            result = await super().send(method, params, session_id)
+            if method == "Network.enable":
+                await asyncio.sleep(1)
+            return result
+
+    fake = SlowEnableCDP()
+    monkeypatch.setattr(mod, "CDPClient", lambda ws, **kw: fake)
+    async with make_browser() as browser:
+        async with cancelled_after(0.02, the_anyio_way):
+            await browser.capture_responses("/api/")
+        await browser.stop_capturing()
+        assert "Network.disable" in fake.calls
 
 
 async def test_connect_blocks_url_patterns_too(fake_cdp):

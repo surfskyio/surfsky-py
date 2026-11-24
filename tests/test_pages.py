@@ -32,6 +32,7 @@ class AttachingCDP(PostsViaSend):
         self.replies: dict[str, dict | Exception] = {}  # method -> its answer
         self.loads = True  # whether a navigation reaches load on its own
         self.during_dispose: list[dict] = []  # pages another client opens meanwhile
+        self.statuses: dict[str, int] = {}  # target -> its document's response status
         self._sessions = 0
         self._targets: dict[str, str] = {}  # session -> target, for events
         self._contexts: dict[str, str | None] = {}  # session -> browser context
@@ -95,6 +96,10 @@ class AttachingCDP(PostsViaSend):
             case "Target.getTargetInfo":
                 target = params["targetId"]
                 return {"targetInfo": {"url": f"https://{target}.test/", "title": target}}
+            case "Page.createIsolatedWorld":
+                return {"executionContextId": 1}
+            case "Runtime.evaluate":  # about:blank reads 0
+                return {"result": {"value": self.statuses.get(self._targets[session_id], 0)}}
             case "Page.navigate":
                 if self.loads:
                     self.handlers["Page.lifecycleEvent"](
@@ -153,7 +158,8 @@ async def test_a_paused_popup_does_not_deadlock_on_its_own_pause(monkeypatch):
         assert await popup.title() == "P"  # setup finished, so the page is usable
         # the arming commands reached Chrome before the resume let the page run
         on_popup = [m for m, _, s in fake.calls if s == "S2"]
-        assert on_popup.index("Network.enable") < on_popup.index("Runtime.runIfWaitingForDebugger")
+        armed_at = on_popup.index("Page.setLifecycleEventsEnabled")
+        assert armed_at < on_popup.index("Runtime.runIfWaitingForDebugger")
 
 
 @pytest.fixture
@@ -179,7 +185,7 @@ async def test_connect_takes_the_first_web_page_through_auto_attach(cdp):
         assert browser.target_id == "T"
         assert browser.pages == [browser]
         assert cdp.sent("Fetch.enable") == []  # nothing to block, nothing paused
-        assert cdp.sent("Network.enable") == [({}, "S1")]
+        assert cdp.sent("Page.enable") == [({}, "S1")]
         assert browser._frame_id == "T"
         assert "Target.attachToTarget" not in [m for m, _, _ in cdp.calls]
 
@@ -323,13 +329,12 @@ async def test_a_popup_is_listed_and_driven_on_its_own_session(cdp):
 
 async def test_a_paused_popup_is_set_up_before_it_runs_and_before_it_is_driven(cdp):
     async with make_browser() as browser:
-        cdp.delay["Network.enable"] = 0.02
+        cdp.delay["Page.setLifecycleEventsEnabled"] = 0.02
         cdp.attach(POPUP, waiting=True)
         await browser.pages[-1].title()
         assert [m for m, _, s in cdp.calls if s == "S2"] == [
             "Page.enable",
             "Page.setLifecycleEventsEnabled",
-            "Network.enable",
             "Runtime.runIfWaitingForDebugger",  # last: it lets the document run
             "Target.getTargetInfo",
         ]
@@ -337,9 +342,9 @@ async def test_a_paused_popup_is_set_up_before_it_runs_and_before_it_is_driven(c
 
 async def test_a_popup_whose_setup_failed_says_so_when_used(cdp):
     async with make_browser() as browser:
-        cdp.rejected["Network.enable"] = "S2"
+        cdp.rejected["Page.setLifecycleEventsEnabled"] = "S2"
         cdp.attach(POPUP, waiting=True)
-        with pytest.raises(RuntimeError, match="Network.enable rejected"):
+        with pytest.raises(RuntimeError, match="Page.setLifecycleEventsEnabled rejected"):
             await browser.pages[-1].title()
         assert browser.connected  # the main page is unaffected
 
@@ -370,12 +375,24 @@ async def test_a_blocked_request_in_a_popup_is_answered_on_the_popup_session(cdp
         popup = browser.pages[-1]
         await popup.url()  # set up
         cdp.handlers["Fetch.requestPaused"]({"requestId": "r1"}, "S2")
-        cdp.document_response("S2", "r2", 503, frame_id="P")
         await settle()
         assert cdp.sent("Fetch.failRequest") == [
             ({"requestId": "r1", "errorReason": "BlockedByClient"}, "S2")
         ]
-        assert (popup.status, browser.status) == (503, None)
+
+
+@pytest.mark.parametrize(("response_status", "status"), [(404, 404), (0, None)])
+async def test_status_is_the_documents_response_status(cdp, response_status, status):
+    cdp.statuses["T"] = response_status
+    async with make_browser() as browser:
+        assert await browser.status() == status
+
+
+async def test_a_popup_reports_its_own_status(cdp):
+    cdp.statuses["P"] = 503
+    async with make_browser() as browser:
+        cdp.attach(POPUP)
+        assert (await browser.pages[-1].status(), await browser.status()) == (503, None)
 
 
 async def test_an_allowed_url_loads_although_its_type_is_blocked(cdp):
@@ -401,6 +418,17 @@ async def test_a_popup_the_site_closes_drops_out_and_refuses_commands(cdp):
         assert not browser.should_recycle  # only the main page going away retires it
         with pytest.raises(RuntimeError, match="page is closed"):
             await popup.title()
+
+
+async def test_a_closed_popup_stops_capturing_without_raising(cdp):
+    async with make_browser() as browser:
+        session = cdp.attach(POPUP)
+        popup = browser.pages[-1]
+        await popup.capture_responses("/api/")
+        cdp.detach(session, "P")
+        await popup.stop_capturing()
+        with pytest.raises(RuntimeError, match="capture_responses"):
+            await popup.wait_for_response("/api/")
 
 
 async def test_a_crashed_popup_counts_as_closed(cdp):
@@ -665,3 +693,16 @@ async def test_pass_challenge_outlasts_the_command_timeout(cdp):
         cdp.replies["Captcha.solve"] = {"challenge": "passed", "antibot": None, "reason": None}
         cdp.delay["Captcha.solve"] = 0.2
         assert (await browser.pass_challenge(timeout=1)).status == "passed"
+
+
+async def test_a_popup_captures_its_own_responses(cdp):
+    async with make_browser() as browser:
+        session = cdp.attach(POPUP)
+        popup = browser.pages[-1]
+        await popup.capture_responses("/api/")
+        assert ({}, session) in cdp.sent("Network.enable")
+        response = {"url": "https://P.test/api/x", "status": 201}
+        cdp.handlers["Network.responseReceived"]({"requestId": "R1", "response": response}, session)
+        cdp.handlers["Network.loadingFinished"]({"requestId": "R1"}, session)
+        assert (await popup.wait_for_response("/api/", timeout=1)).status == 201
+        assert browser.responses == []

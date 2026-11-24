@@ -28,8 +28,8 @@ RETIRE_ERRORS = re.compile(r"blocked|captcha", re.IGNORECASE)
 
 async def scrape(browser: Browser, url: str) -> str:
     await browser.goto(url, wait_until="domcontentloaded")
-    if browser.status is not None and browser.status >= 500:
-        raise RuntimeError(f"HTTP {browser.status}")
+    if (status := await browser.status()) is not None and status >= 500:
+        raise RuntimeError(f"HTTP {status}")
     return await browser.title()
 
 
